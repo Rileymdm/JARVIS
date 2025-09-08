@@ -522,6 +522,104 @@ class RocketSimulationUI(QtWidgets.QWidget):
         ax.figure.tight_layout()
         self.canvas.draw()
 
+        # === FBD Animation Overlay ===
+        import matplotlib.patches as mpatches
+        from matplotlib.lines import Line2D
+        from PyQt5.QtCore import QTimer
+
+        # Remove previous FBD artists if any
+        if hasattr(self, '_fbd_artists'):
+            for artist in self._fbd_artists:
+                try:
+                    artist.remove()
+                except Exception:
+                    pass
+        self._fbd_artists = []
+
+        # Rocket and force arrow parameters
+        rocket_width = 0.08
+        rocket_height = 0.18
+        nose_height = 0.04
+        fin_height = 0.03
+        fin_width = 0.03
+
+        # Initial y position (altitude)
+        y_pos = results[0]['altitude']
+        # Body
+        body = mpatches.Rectangle((0.5 - rocket_width/2, y_pos), rocket_width, rocket_height, color='#E94F37', zorder=10)
+        ax.add_patch(body)
+        # Nose cone (triangle)
+        nose = mpatches.Polygon([[0.5 - rocket_width/2, y_pos + rocket_height],
+                                 [0.5 + rocket_width/2, y_pos + rocket_height],
+                                 [0.5, y_pos + rocket_height + nose_height]],
+                                 closed=True, color='#FFD447', zorder=11)
+        ax.add_patch(nose)
+        # Left fin
+        left_fin = mpatches.Polygon([[0.5 - rocket_width/2, y_pos],
+                                     [0.5 - rocket_width/2 - fin_width, y_pos - fin_height],
+                                     [0.5 - rocket_width/2, y_pos + 0.03]],
+                                     closed=True, color='#3C2F1E', zorder=9)
+        ax.add_patch(left_fin)
+        # Right fin
+        right_fin = mpatches.Polygon([[0.5 + rocket_width/2, y_pos],
+                                      [0.5 + rocket_width/2 + fin_width, y_pos - fin_height],
+                                      [0.5 + rocket_width/2, y_pos + 0.03]],
+                                      closed=True, color='#3C2F1E', zorder=9)
+        ax.add_patch(right_fin)
+
+        # Force arrows (Line2D)
+        thrust_line, = ax.plot([0.5, 0.5], [y_pos, y_pos], color='g', linewidth=3, marker='^', markersize=10, label='Thrust', zorder=12)
+        drag_line, = ax.plot([0.5, 0.5], [y_pos + rocket_height, y_pos + rocket_height], color='r', linewidth=3, marker='v', markersize=10, label='Drag', zorder=12)
+        gravity_line, = ax.plot([0.5, 0.5], [y_pos + rocket_height/2, y_pos + rocket_height/2 - 0.08], color='b', linewidth=3, marker='v', markersize=10, label='Gravity', zorder=12)
+
+        self._fbd_artists = [body, nose, left_fin, right_fin, thrust_line, drag_line, gravity_line]
+
+        # Precompute max values for normalization
+        max_thrust = max((r['thrust'] for r in results if r['thrust'] > 0), default=1)
+        max_drag = max((r['drag'] for r in results if r['drag'] > 0), default=1)
+
+        # Animation state
+        self._fbd_frame = 0
+        self._fbd_results = results
+
+        def fbd_anim_step():
+            frame = self._fbd_frame
+            if frame >= len(self._fbd_results):
+                self._fbd_timer.stop()
+                return
+            result = self._fbd_results[frame]
+            y_pos = result['altitude']
+            # Move rocket
+            body.set_xy((0.5 - rocket_width/2, y_pos))
+            nose.set_xy([[0.5 - rocket_width/2, y_pos + rocket_height],
+                         [0.5 + rocket_width/2, y_pos + rocket_height],
+                         [0.5, y_pos + rocket_height + nose_height]])
+            left_fin.set_xy([[0.5 - rocket_width/2, y_pos],
+                             [0.5 - rocket_width/2 - fin_width, y_pos - fin_height],
+                             [0.5 - rocket_width/2, y_pos + 0.03]])
+            right_fin.set_xy([[0.5 + rocket_width/2, y_pos],
+                              [0.5 + rocket_width/2 + fin_width, y_pos - fin_height],
+                              [0.5 + rocket_width/2, y_pos + 0.03]])
+            # Normalize arrow lengths
+            thrust_val = result['thrust'] / max_thrust if max_thrust else 0
+            drag_val = result['drag'] / max_drag if max_drag else 0
+            # Update thrust arrow (upwards from rocket base)
+            thrust_line.set_data([0.5, 0.5], [y_pos, y_pos + thrust_val * 0.2])
+            # Update drag arrow (downwards from rocket top)
+            drag_line.set_data([0.5, 0.5], [y_pos + rocket_height, y_pos + rocket_height - drag_val * 0.2])
+            # Gravity arrow (fixed length, always down from rocket center)
+            gravity_line.set_data([0.5, 0.5], [y_pos + rocket_height/2, y_pos + rocket_height/2 - 0.08])
+            self.canvas.draw_idle()
+            self._fbd_frame += 1
+
+        # Use QTimer for animation
+        if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
+            self._fbd_timer.stop()
+        self._fbd_timer = QTimer()
+        self._fbd_timer.timeout.connect(fbd_anim_step)
+        self._fbd_frame = 0
+        self._fbd_timer.start(30)  # ~33 FPS
+
         # Add popup tooltip on hover (default to altitude, or first selected variable)
         if not hasattr(self, 'tooltip'):
             self.tooltip = QtWidgets.QToolTip
