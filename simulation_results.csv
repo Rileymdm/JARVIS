@@ -1,0 +1,2 @@
+time,altitude,velocity,acceleration,thrust,drag,chute_deployed
+0.05,0,-0.49050000000000005,-9.81,0.0,0.0,False
