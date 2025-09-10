@@ -94,42 +94,6 @@ class CrashImageDialog(QtWidgets.QDialog):
 class RocketSimulationUI(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        # ...existing code...
-        # DROGUE CHUTE UI (after other input widgets, before adding rows to form_layout)
-        self.drogue_enable_checkbox = QtWidgets.QCheckBox("Enable Drogue Chute")
-        self.drogue_enable_checkbox.setChecked(False)
-        self.drogue_enable_checkbox.stateChanged.connect(self.toggle_drogue_ui)
-
-        self.drogue_size_input = QtWidgets.QLineEdit()
-        self.drogue_size_input.setPlaceholderText("Drogue Size")
-        self.drogue_size_unit = QtWidgets.QComboBox(); self.drogue_size_unit.addItems(["m²", "ft²"])
-        drogue_size_row = QtWidgets.QHBoxLayout(); drogue_size_row.addWidget(self.drogue_size_input); drogue_size_row.addWidget(self.drogue_size_unit)
-
-        self.drogue_cd_input = QtWidgets.QLineEdit()
-        self.drogue_cd_input.setPlaceholderText("Drogue Cd")
-        self.drogue_cd_input.setText("1.5")
-
-        self.drogue_deploy_mode = QtWidgets.QComboBox(); self.drogue_deploy_mode.addItems(["At Apogee", "At Altitude"])
-        self.drogue_deploy_altitude_input = QtWidgets.QLineEdit()
-        self.drogue_deploy_altitude_input.setPlaceholderText("Deploy Altitude")
-        self.drogue_deploy_altitude_unit = QtWidgets.QComboBox(); self.drogue_deploy_altitude_unit.addItems(["m", "ft"])
-        drogue_deploy_altitude_row = QtWidgets.QHBoxLayout(); drogue_deploy_altitude_row.addWidget(self.drogue_deploy_altitude_input); drogue_deploy_altitude_row.addWidget(self.drogue_deploy_altitude_unit)
-
-        # Drogue chute UI container
-        self.drogue_widget = QtWidgets.QWidget()
-        drogue_layout = QtWidgets.QFormLayout(self.drogue_widget)
-        drogue_layout.addRow("Drogue Size:", drogue_size_row)
-        drogue_layout.addRow("Drogue Cd:", self.drogue_cd_input)
-        drogue_layout.addRow("Drogue Deploy Mode:", self.drogue_deploy_mode)
-        drogue_layout.addRow("Drogue Deploy Altitude:", drogue_deploy_altitude_row)
-        self.drogue_widget.setVisible(False)
-        self.init_ui()
-        self.load_inputs()  # Load inputs on startup
-
-    def toggle_drogue_ui(self, state):
-        self.drogue_widget.setVisible(state == QtCore.Qt.Checked)
-    def __init__(self):
-        super().__init__()
         self.init_ui()
         self.load_inputs()  # Load inputs on startup
 
@@ -206,18 +170,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
         form_layout.addRow("Fin Thickness:", fin_thickness_row)
         form_layout.addRow("Fin Length:", fin_length_row)
         form_layout.addRow("Body Tube Diameter:", body_diameter_row)
-    form_layout.addRow("Parachute Deploy Height:", chute_height_row)
-    form_layout.addRow("Parachute Size:", chute_size_row)
-    # New row for parachute drag coefficient
-    self.chute_cd_input = QtWidgets.QLineEdit()
-    self.chute_cd_input.setPlaceholderText("Parachute Cd")
-    self.chute_cd_input.setText("1.5")
-    form_layout.addRow("Parachute Drag Coefficient (Cd):", self.chute_cd_input)
-    # Drogue chute UI
-    form_layout.addRow(self.drogue_enable_checkbox)
-    form_layout.addRow(self.drogue_widget)
-    def toggle_drogue_ui(self, state):
-        self.drogue_widget.setVisible(state == QtCore.Qt.Checked)
+        form_layout.addRow("Parachute Deploy Height:", chute_height_row)
+        form_layout.addRow("Parachute Size:", chute_size_row)
+        # New row for parachute drag coefficient
+        self.chute_cd_input = QtWidgets.QLineEdit()
+        self.chute_cd_input.setPlaceholderText("Parachute Cd")
+        self.chute_cd_input.setText("1.5")
+        form_layout.addRow("Parachute Drag Coefficient (Cd):", self.chute_cd_input)
 
         left_layout.addLayout(form_layout)
 
