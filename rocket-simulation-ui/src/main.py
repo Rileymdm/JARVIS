@@ -97,6 +97,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.init_ui()
         self.load_inputs()  # Load inputs on startup
 
+
     def init_ui(self):
         self.setWindowTitle('Rocket Simulation')
         main_layout = QtWidgets.QHBoxLayout(self)
@@ -179,6 +180,33 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
         left_layout.addLayout(form_layout)
 
+        # Thematic progress bar for flight phase
+        self.phase_progress = QtWidgets.QProgressBar()
+        self.phase_progress.setMinimum(0)
+        self.phase_progress.setMaximum(100)
+        self.phase_progress.setValue(0)
+        self.phase_progress.setTextVisible(True)
+        self.phase_progress.setAlignment(QtCore.Qt.AlignCenter)
+        # Retro style: background beige, chunk red, text inverse (beige on red)
+        self.phase_progress.setStyleSheet('''
+            QProgressBar {
+                background-color: #FDF6E3;
+                border: 2px solid #BCA16A;
+                border-radius: 8px;
+                height: 24px;
+                color: #3C2F1E;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QProgressBar::chunk {
+                background-color: #E94F37;
+                color: #FDF6E3;
+                font-weight: bold;
+                font-size: 14px;
+            }
+        ''')
+        left_layout.addWidget(self.phase_progress)
+
         # Buttons
         self.thrust_curve_path = None
         self.select_thrust_button = QtWidgets.QPushButton('Select Thrust Curve CSV')
@@ -202,6 +230,18 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.result_label = QtWidgets.QLabel('Results will be displayed here.')
         self.result_label.setWordWrap(True)
         self.result_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.result_label.setTextFormat(QtCore.Qt.RichText)
+        self.result_label.setStyleSheet('''
+            QLabel {
+                background-color: #FDF6E3;
+                border: 2px solid #E94F37;
+                border-radius: 10px;
+                padding: 10px;
+                color: #3C2F1E;
+                font-family: 'Press Start 2P', monospace;
+                font-size: 13px;
+            }
+        ''')
         left_layout.addWidget(self.result_label)
 
         # Error/warning label
@@ -223,6 +263,25 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.toolbar = NavigationToolbar(self.canvas, self)
         self.toolbar.setStyleSheet("background-color: #F8F5E3; border: 2px solid #BCA16A; color: #3C2F1E; font-family: 'Press Start 2P', monospace; font-size: 12px;")
         right_layout.addWidget(self.toolbar)
+
+        # --- Animation Controls ---
+        anim_controls_layout = QtWidgets.QHBoxLayout()
+        self.anim_pause_button = QtWidgets.QPushButton('Pause')
+        self.anim_pause_button.setCheckable(True)
+        self.anim_pause_button.setChecked(False)
+        self.anim_pause_button.clicked.connect(self.toggle_fbd_animation)
+        anim_controls_layout.addWidget(self.anim_pause_button)
+
+        anim_controls_layout.addWidget(QtWidgets.QLabel('Speed:'))
+        self.anim_speed_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.anim_speed_slider.setMinimum(1)
+        self.anim_speed_slider.setMaximum(100)
+        self.anim_speed_slider.setValue(30)  # Default to 30ms per frame
+        self.anim_speed_slider.setTickInterval(10)
+        self.anim_speed_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.anim_speed_slider.valueChanged.connect(self.set_fbd_anim_speed)
+        anim_controls_layout.addWidget(self.anim_speed_slider)
+        right_layout.addLayout(anim_controls_layout)
 
         right_widget.setLayout(right_layout)
 
@@ -315,6 +374,20 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.body_diameter_unit.currentIndexChanged.connect(lambda: self.update_conversions('body_diameter'))
         self.chute_height_unit.currentIndexChanged.connect(lambda: self.update_conversions('chute_height'))
         self.chute_size_unit.currentIndexChanged.connect(lambda: self.update_conversions('chute_size'))
+
+    def toggle_fbd_animation(self):
+        if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
+            if self.anim_pause_button.isChecked():
+                self.anim_pause_button.setText('Resume')
+                self._fbd_timer.stop()
+            else:
+                self.anim_pause_button.setText('Pause')
+                self._fbd_timer.start(self.anim_speed_slider.value())
+
+    def set_fbd_anim_speed(self):
+        if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
+            if not self.anim_pause_button.isChecked():
+                self._fbd_timer.start(self.anim_speed_slider.value())
 
     def update_conversions(self, field):
         # Only convert value if the user changes the unit, not on load
@@ -459,20 +532,92 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     def display_results(self, results):
         if results:
+            # Find max values and their times
             max_alt = max(r['altitude'] for r in results)
+            max_alt_idx = next(i for i, r in enumerate(results) if r['altitude'] == max_alt)
+            max_alt_time = results[max_alt_idx]['time']
+
             max_vel = max(r['velocity'] for r in results)
+            max_vel_idx = next(i for i, r in enumerate(results) if r['velocity'] == max_vel)
+            max_vel_time = results[max_vel_idx]['time']
+
+            max_thrust = max(r['thrust'] for r in results)
+            max_thrust_idx = next(i for i, r in enumerate(results) if r['thrust'] == max_thrust)
+            max_thrust_time = results[max_thrust_idx]['time']
+
+            max_drag = max(r['drag'] for r in results)
+            max_drag_idx = next(i for i, r in enumerate(results) if r['drag'] == max_drag)
+            max_drag_time = results[max_drag_idx]['time']
+
+            max_mass = max(r['mass'] for r in results)
+            max_mass_idx = next(i for i, r in enumerate(results) if r['mass'] == max_mass)
+            max_mass_time = results[max_mass_idx]['time']
+
+            # Mach calculation using local speed of sound
+            local_a = self.get_local_speed_of_sound()
+            machs = [r['velocity']/local_a if local_a else 0 for r in results]
+            max_mach = max(machs)
+            max_mach_idx = machs.index(max_mach)
+            max_mach_time = results[max_mach_idx]['time']
+
             vel_unit = 'm/s'
+            alt_unit = 'm'
+            thrust_unit = 'N'
+            drag_unit = 'N'
+            mass_unit = 'kg'
             if self.unit_select.currentIndex() == 1:
                 max_vel_disp = max_vel * 3.28084
                 vel_unit = 'ft/s'
+                max_alt_disp = max_alt * 3.28084
+                alt_unit = 'ft'
+                max_thrust_disp = max_thrust * 0.224809
+                thrust_unit = 'lbf'
+                max_drag_disp = max_drag * 0.224809
+                drag_unit = 'lbf'
+                max_mass_disp = max_mass * 2.20462
+                mass_unit = 'lb'
             else:
                 max_vel_disp = max_vel
-            # Mach calculation using local speed of sound
-            mach = max_vel / self.get_local_speed_of_sound()
-            self.result_label.setText(
-                f"Apogee: {max_alt:.2f} m\nTotal Time: {results[-1]['time']:.2f} s\n"
-                f"Max Velocity: {max_vel_disp:.2f} {vel_unit}\nMach: {mach:.2f}"
+                max_alt_disp = max_alt
+                max_thrust_disp = max_thrust
+                max_drag_disp = max_drag
+                max_mass_disp = max_mass
+
+            # Dragstrip-style stat: show all max times in a single line
+            dragstrip = (
+                f"[Max Times] Apogee: {max_alt_time:.2f}s | Velocity: {max_vel_time:.2f}s | Mach: {max_mach_time:.2f}s | Thrust: {max_thrust_time:.2f}s | Drag: {max_drag_time:.2f}s | Mass: {max_mass_time:.2f}s"
             )
+
+            stats_html = f"""
+<div style='width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background:#181818;'>
+    <table style='width:98vw;max-width:900px;height:92vh;min-height:400px;border-collapse:collapse;font-family:PressStart2P,monospace;font-size:1.2vw;letter-spacing:0.04em;background:#111;color:#111;border:6px solid #FFD447;box-shadow:0 0 24px #000;overflow:hidden;text-align:center;'>
+        <tr>
+            <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 1vw 2vw 2vw; border-right:4px solid #FFD447;'>
+                <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>TIME</td><td style='text-align:center;'>{results[-1]['time']:.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>APOGEE</td><td style='text-align:center;'>{max_alt_disp:.2f} {alt_unit.upper()}</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>VELOCITY</td><td style='text-align:center;'>{max_vel_disp:.2f} {vel_unit.upper()}</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MACH</td><td style='text-align:center;'>{max_mach:.2f}</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>THRUST</td><td style='text-align:center;'>{max_thrust_disp:.2f} {thrust_unit.upper()}</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>DRAG</td><td style='text-align:center;'>{max_drag_disp:.2f} {drag_unit.upper()}</td></tr>
+                    <tr><td style='font-weight:bold;text-align:center;'>MASS</td><td style='text-align:center;'>{max_mass_disp:.2f} {mass_unit.upper()}</td></tr>
+                </table>
+            </td>
+            <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 2vw 2vw 1vw;'>
+                <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX APOGEE</td><td style='text-align:center;'>{max_alt_disp:.2f} {alt_unit.upper()} T={max_alt_time:.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX VELOCITY</td><td style='text-align:center;'>{max_vel_disp:.2f} {vel_unit.upper()} T={max_vel_time:.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX MACH</td><td style='text-align:center;'>{max_mach:.2f} T={max_mach_time:.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX THRUST</td><td style='text-align:center;'>{max_thrust_disp:.2f} {thrust_unit.upper()} T={max_thrust_time:.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX DRAG</td><td style='text-align:center;'>{max_drag_disp:.2f} {drag_unit.upper()} T={max_drag_time:.2f} S</td></tr>
+                    <tr><td style='font-weight:bold;text-align:center;'>MAX MASS</td><td style='text-align:center;'>{max_mass_disp:.2f} {mass_unit.upper()} T={max_mass_time:.2f} S</td></tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</div>
+"""
+            self.result_label.setText(stats_html)
         else:
             self.result_label.setText("No results to display.")
 
@@ -537,40 +682,49 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self._fbd_artists = []
 
         # Rocket and force arrow parameters
-        rocket_width = 0.08
-        rocket_height = 0.18
-        nose_height = 0.04
-        fin_height = 0.03
-        fin_width = 0.03
+        rocket_width = 10
+        rocket_height = 100
+        nose_height = 10
+        fin_height = 3
+        fin_width = 3
 
-        # Initial y position (altitude)
-        y_pos = results[0]['altitude']
+        # Get time and altitude arrays
+        times = [r['time'] for r in results]
+        altitudes = [r['altitude'] for r in results]
+
+        # Initial position (first point on curve)
+        x_pos = times[0]
+        y_pos = altitudes[0]
+
         # Body
-        body = mpatches.Rectangle((0.5 - rocket_width/2, y_pos), rocket_width, rocket_height, color='#E94F37', zorder=10)
+        body = mpatches.Rectangle((x_pos - rocket_width/2, y_pos), rocket_width, rocket_height, color='#E94F37', zorder=10)
         ax.add_patch(body)
         # Nose cone (triangle)
-        nose = mpatches.Polygon([[0.5 - rocket_width/2, y_pos + rocket_height],
-                                 [0.5 + rocket_width/2, y_pos + rocket_height],
-                                 [0.5, y_pos + rocket_height + nose_height]],
+        nose = mpatches.Polygon([[x_pos - rocket_width/2, y_pos + rocket_height],
+                                 [x_pos + rocket_width/2, y_pos + rocket_height],
+                                 [x_pos, y_pos + rocket_height + nose_height]],
                                  closed=True, color='#FFD447', zorder=11)
         ax.add_patch(nose)
         # Left fin
-        left_fin = mpatches.Polygon([[0.5 - rocket_width/2, y_pos],
-                                     [0.5 - rocket_width/2 - fin_width, y_pos - fin_height],
-                                     [0.5 - rocket_width/2, y_pos + 0.03]],
+        left_fin = mpatches.Polygon([[x_pos - rocket_width/2, y_pos],
+                                     [x_pos - rocket_width/2 - fin_width, y_pos - fin_height],
+                                     [x_pos - rocket_width/2, y_pos + 0.03]],
                                      closed=True, color='#3C2F1E', zorder=9)
         ax.add_patch(left_fin)
         # Right fin
-        right_fin = mpatches.Polygon([[0.5 + rocket_width/2, y_pos],
-                                      [0.5 + rocket_width/2 + fin_width, y_pos - fin_height],
-                                      [0.5 + rocket_width/2, y_pos + 0.03]],
+        right_fin = mpatches.Polygon([[x_pos + rocket_width/2, y_pos],
+                                      [x_pos + rocket_width/2 + fin_width, y_pos - fin_height],
+                                      [x_pos + rocket_width/2, y_pos + 0.03]],
                                       closed=True, color='#3C2F1E', zorder=9)
         ax.add_patch(right_fin)
 
+        # Offset for force arrows (to the right of the rocket)
+        arrow_x_offset = rocket_width * 1.5
+
         # Force arrows (Line2D)
-        thrust_line, = ax.plot([0.5, 0.5], [y_pos, y_pos], color='g', linewidth=3, marker='^', markersize=10, label='Thrust', zorder=12)
-        drag_line, = ax.plot([0.5, 0.5], [y_pos + rocket_height, y_pos + rocket_height], color='r', linewidth=3, marker='v', markersize=10, label='Drag', zorder=12)
-        gravity_line, = ax.plot([0.5, 0.5], [y_pos + rocket_height/2, y_pos + rocket_height/2 - 0.08], color='b', linewidth=3, marker='v', markersize=10, label='Gravity', zorder=12)
+        thrust_line, = ax.plot([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos, y_pos], color='g', linewidth=3, marker='^', markersize=10, label='Thrust', zorder=12)
+        drag_line, = ax.plot([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height, y_pos + rocket_height], color='r', linewidth=3, marker='v', markersize=10, label='Drag', zorder=12)
+        gravity_line, = ax.plot([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height/2, y_pos + rocket_height/2 - 0.08], color='b', linewidth=3, marker='v', markersize=10, label='Gravity', zorder=12)
 
         self._fbd_artists = [body, nose, left_fin, right_fin, thrust_line, drag_line, gravity_line]
 
@@ -582,33 +736,130 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self._fbd_frame = 0
         self._fbd_results = results
 
+        from utils import get_flight_phase
         def fbd_anim_step():
             frame = self._fbd_frame
             if frame >= len(self._fbd_results):
                 self._fbd_timer.stop()
+                # Set progress bar to 100% and "Landed" at end
+                self.phase_progress.setValue(100)
+                self.phase_progress.setFormat('LANDED')
+                self.phase_progress.setStyleSheet(self.phase_progress.styleSheet() + 'QProgressBar::chunk { background-color: #3C2F1E; color: #FFD447; }')
                 return
             result = self._fbd_results[frame]
+            prev_result = self._fbd_results[frame-1] if frame > 0 else None
+            x_pos = result['time']
             y_pos = result['altitude']
             # Move rocket
-            body.set_xy((0.5 - rocket_width/2, y_pos))
-            nose.set_xy([[0.5 - rocket_width/2, y_pos + rocket_height],
-                         [0.5 + rocket_width/2, y_pos + rocket_height],
-                         [0.5, y_pos + rocket_height + nose_height]])
-            left_fin.set_xy([[0.5 - rocket_width/2, y_pos],
-                             [0.5 - rocket_width/2 - fin_width, y_pos - fin_height],
-                             [0.5 - rocket_width/2, y_pos + 0.03]])
-            right_fin.set_xy([[0.5 + rocket_width/2, y_pos],
-                              [0.5 + rocket_width/2 + fin_width, y_pos - fin_height],
-                              [0.5 + rocket_width/2, y_pos + 0.03]])
+            body.set_xy((x_pos - rocket_width/2, y_pos))
+            nose.set_xy([[x_pos - rocket_width/2, y_pos + rocket_height],
+                         [x_pos + rocket_width/2, y_pos + rocket_height],
+                         [x_pos, y_pos + rocket_height + nose_height]])
+            left_fin.set_xy([[x_pos - rocket_width/2, y_pos],
+                             [x_pos - rocket_width/2 - fin_width, y_pos - fin_height],
+                             [x_pos - rocket_width/2, y_pos + 0.03]])
+            right_fin.set_xy([[x_pos + rocket_width/2, y_pos],
+                              [x_pos + rocket_width/2 + fin_width, y_pos - fin_height],
+                              [x_pos + rocket_width/2, y_pos + 0.03]])
             # Normalize arrow lengths
             thrust_val = result['thrust'] / max_thrust if max_thrust else 0
             drag_val = result['drag'] / max_drag if max_drag else 0
             # Update thrust arrow (upwards from rocket base)
-            thrust_line.set_data([0.5, 0.5], [y_pos, y_pos + thrust_val * 0.2])
+            thrust_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos, y_pos + thrust_val * 0.2])
             # Update drag arrow (downwards from rocket top)
-            drag_line.set_data([0.5, 0.5], [y_pos + rocket_height, y_pos + rocket_height - drag_val * 0.2])
+            drag_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height, y_pos + rocket_height - drag_val * 0.2])
             # Gravity arrow (fixed length, always down from rocket center)
-            gravity_line.set_data([0.5, 0.5], [y_pos + rocket_height/2, y_pos + rocket_height/2 - 0.08])
+            gravity_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height/2, y_pos + rocket_height/2 - 0.08])
+
+            # --- Live statistics update ---
+            # Units
+            if self.unit_select.currentIndex() == 1:  # Imperial
+                alt_disp = result['altitude'] * 3.28084
+                alt_unit = 'ft'
+                vel_disp = result['velocity'] * 3.28084
+                vel_unit = 'ft/s'
+                mass_disp = result['mass'] * 2.20462
+                mass_unit = 'lb'
+                thrust_disp = result['thrust'] * 0.224809
+                thrust_unit = 'lbf'
+                drag_disp = result['drag'] * 0.224809
+                drag_unit = 'lbf'
+            else:
+                alt_disp = result['altitude']
+                alt_unit = 'm'
+                vel_disp = result['velocity']
+                vel_unit = 'm/s'
+                mass_disp = result['mass']
+                mass_unit = 'kg'
+                thrust_disp = result['thrust']
+                thrust_unit = 'N'
+                drag_disp = result['drag']
+                drag_unit = 'N'
+            # Mach number
+            try:
+                mach = result['velocity'] / self.get_local_speed_of_sound()
+            except Exception:
+                mach = 0.0
+            # --- Dragstrip-style max time stat (live) ---
+            # Compute max times up to current frame
+            results_so_far = self._fbd_results[:frame+1]
+            def get_max_time(key, arr=results_so_far):
+                max_val = max(r[key] for r in arr)
+                idx = next(i for i, r in enumerate(arr) if r[key] == max_val)
+                return arr[idx]['time']
+            local_a = self.get_local_speed_of_sound()
+            machs = [r['velocity']/local_a if local_a else 0 for r in results_so_far]
+            max_mach = max(machs)
+            max_mach_idx = machs.index(max_mach)
+            max_mach_time = results_so_far[max_mach_idx]['time']
+            dragstrip = (
+                f"[Max Times] Apogee: {get_max_time('altitude'):.2f}s | Velocity: {get_max_time('velocity'):.2f}s | Mach: {max_mach_time:.2f}s | Thrust: {get_max_time('thrust'):.2f}s | Drag: {get_max_time('drag'):.2f}s | Mass: {get_max_time('mass'):.2f}s"
+            )
+            stats_html = f"""
+<div style='width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background:#181818;'>
+    <table style='width:98vw;max-width:900px;height:92vh;min-height:400px;border-collapse:collapse;font-family:PressStart2P,monospace;font-size:1.2vw;letter-spacing:0.04em;background:#111;color:#111;border:6px solid #FFD447;box-shadow:0 0 24px #000;overflow:hidden;text-align:center;'>
+        <tr>
+            <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 1vw 2vw 2vw; border-right:4px solid #FFD447;'>
+                <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>TIME</td><td style='text-align:center;'>{result['time']:.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>ALTITUDE</td><td style='text-align:center;'>{alt_disp:.2f} {alt_unit.upper()}</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>VELOCITY</td><td style='text-align:center;'>{vel_disp:.2f} {vel_unit.upper()}</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MACH</td><td style='text-align:center;'>{mach:.2f}</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>THRUST</td><td style='text-align:center;'>{thrust_disp:.2f} {thrust_unit.upper()}</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>DRAG</td><td style='text-align:center;'>{drag_disp:.2f} {drag_unit.upper()}</td></tr>
+                    <tr><td style='font-weight:bold;text-align:center;'>MASS</td><td style='text-align:center;'>{mass_disp:.2f} {mass_unit.upper()}</td></tr>
+                </table>
+            </td>
+            <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 2vw 2vw 1vw;'>
+                <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX APOGEE</td><td style='text-align:center;'>{get_max_time('altitude'):.2f} {alt_unit.upper()} T={get_max_time('altitude'):.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX VELOCITY</td><td style='text-align:center;'>{get_max_time('velocity'):.2f} {vel_unit.upper()} T={get_max_time('velocity'):.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX MACH</td><td style='text-align:center;'>{max_mach:.2f} T={max_mach_time:.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX THRUST</td><td style='text-align:center;'>{get_max_time('thrust'):.2f} {thrust_unit.upper()} T={get_max_time('thrust'):.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX DRAG</td><td style='text-align:center;'>{get_max_time('drag'):.2f} {drag_unit.upper()} T={get_max_time('drag'):.2f} S</td></tr>
+                    <tr><td style='font-weight:bold;text-align:center;'>MAX MASS</td><td style='text-align:center;'>{get_max_time('mass'):.2f} {mass_unit.upper()} T={get_max_time('mass'):.2f} S</td></tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</div>
+"""
+            self.result_label.setText(stats_html)
+
+            # --- Progress bar update ---
+            percent = int(100 * frame / (len(self._fbd_results)-1))
+            phase = get_flight_phase(result, prev_result).upper()
+            self.phase_progress.setValue(percent)
+            # Inverse color for phase text inside bar
+            if phase in ['LIFTOFF', 'POWERED ASCENT', 'COAST', 'APOGEE', 'DESCENT', 'CHUTE DESCENT']:
+                self.phase_progress.setFormat(phase)
+                # Red chunk, beige text
+                self.phase_progress.setStyleSheet(self.phase_progress.styleSheet() + 'QProgressBar::chunk { background-color: #E94F37; color: #FDF6E3; }')
+            elif phase == 'LANDED':
+                self.phase_progress.setFormat('LANDED')
+                # Brown chunk, yellow text
+                self.phase_progress.setStyleSheet(self.phase_progress.styleSheet() + 'QProgressBar::chunk { background-color: #3C2F1E; color: #FFD447; }')
+
             self.canvas.draw_idle()
             self._fbd_frame += 1
 
@@ -618,7 +869,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self._fbd_timer = QTimer()
         self._fbd_timer.timeout.connect(fbd_anim_step)
         self._fbd_frame = 0
-        self._fbd_timer.start(30)  # ~33 FPS
+        self._fbd_timer.start(self.anim_speed_slider.value())
 
         # Add popup tooltip on hover (default to altitude, or first selected variable)
         if not hasattr(self, 'tooltip'):

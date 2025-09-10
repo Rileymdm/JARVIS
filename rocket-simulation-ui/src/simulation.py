@@ -82,14 +82,14 @@ def run_simulation(m, Cd, A, rho, thrust_curve_path=None, chute_height=None, chu
     def drag_force(v, Cd_val, A_val):
         return 0.5 * rho * v**2 * Cd_val * A_val
 
-    try:
-        import random
-        chute_deployed = False
-        deploy_period = random.uniform(0.5, 2.5)  # random deployment period in seconds
-        deploy_start = None
-        deploy_end = None
+    import random
+    chute_deployed = False
+    deploy_period = random.uniform(0.5, 2.5)  # random deployment period in seconds
+    deploy_start = None
+    deploy_end = None
 
-        deployment_stats = None
+    deployment_stats = None
+    try:
         while True:
             F = thrust_func_fixed(time) if time <= burn_time else 0.0
             # Deploy parachute if falling and below chute_height (if provided), else default to 300m
