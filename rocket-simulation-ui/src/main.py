@@ -12,6 +12,7 @@ import traceback
 
 # === FULL RETRO PIXEL STYLE ===
 retro_style = """
+from scipy.ndimage import rotate
 QProgressBar {
     background-color: #FDF6E3;
     border: 2px solid #BCA16A;
@@ -94,12 +95,16 @@ class CrashImageDialog(QtWidgets.QDialog):
 class RocketSimulationUI(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
+        self._rocket_img_cache = {}
+        # Set window and taskbar icon (use .ico for best Windows compatibility)
+        self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), 'JARVIS.ico')))
         self.init_ui()
         self.load_inputs()  # Load inputs on startup
+        self.showMaximized()
 
 
     def init_ui(self):
-        self.setWindowTitle('Rocket Simulation')
+        self.setWindowTitle('JARVIS')
         main_layout = QtWidgets.QHBoxLayout(self)
         self.tabs = QtWidgets.QTabWidget()
         main_panel = QtWidgets.QWidget()
@@ -326,6 +331,272 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.humidity_input.textChanged.connect(self.update_air_density)
         self.tabs.addTab(launch_tab, "Launch Conditions")
 
+        # Add Launch tab last (to the right)
+        launch_anim_tab = QtWidgets.QWidget()
+        launch_anim_layout = QtWidgets.QVBoxLayout(launch_anim_tab)
+
+        wind_group = QtWidgets.QGroupBox("Wind Simulation")
+        wind_layout = QtWidgets.QFormLayout(wind_group)
+
+        self.wind_speed_input = QtWidgets.QDoubleSpinBox()
+        self.wind_speed_input.setRange(0, 100)
+        self.wind_speed_input.setValue(0)
+        self.wind_speed_input.setSuffix(" m/s")
+        wind_layout.addRow("Wind Speed:", self.wind_speed_input)
+
+        self.wind_direction_input = QtWidgets.QDial()
+        self.wind_direction_input.setMinimum(0)
+        self.wind_direction_input.setMaximum(359)
+        self.wind_direction_input.setNotchesVisible(True)
+        wind_dir_label = QtWidgets.QLabel("Wind Direction: 0° (East)")
+        wind_dir_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.wind_direction_input.valueChanged.connect(lambda v: wind_dir_label.setText(f"Wind Direction: {v}°"))
+        wind_layout.addRow(wind_dir_label, self.wind_direction_input)
+
+        launch_anim_layout.addWidget(wind_group)
+        # Stability controls
+        stability_group = QtWidgets.QGroupBox("Rocket Stability")
+        stability_layout = QtWidgets.QFormLayout(stability_group)
+
+        self.rocket_length_input = QtWidgets.QDoubleSpinBox()
+        self.rocket_length_input.setRange(0.1, 10.0)
+        self.rocket_length_input.setValue(1.0)
+        self.rocket_length_input.setSuffix(" m")
+        stability_layout.addRow("Rocket Length:", self.rocket_length_input)
+
+        self.center_of_mass_input = QtWidgets.QDoubleSpinBox()
+        self.center_of_mass_input.setRange(0.0, 10.0)
+        self.center_of_mass_input.setValue(0.5)
+        self.center_of_mass_input.setSuffix(" m")
+        stability_layout.addRow("Center of Mass:", self.center_of_mass_input)
+
+        self.center_of_pressure_input = QtWidgets.QDoubleSpinBox()
+        self.center_of_pressure_input.setRange(0.0, 10.0)
+        self.center_of_pressure_input.setValue(0.7)
+        self.center_of_pressure_input.setSuffix(" m")
+        stability_layout.addRow("Center of Pressure:", self.center_of_pressure_input)
+
+        self.stability_status_label = QtWidgets.QLabel("Stability Margin: 0.2 m (Stable)")
+        self.stability_status_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.stability_status_label.setStyleSheet("font-size:14px;color:#2E8B57;font-weight:bold;")
+        stability_layout.addRow(self.stability_status_label)
+
+        # Update stability margin when inputs change
+        def update_stability():
+            margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
+            status = "Stable" if margin > 0.05 else "Unstable"
+            color = "#2E8B57" if status == "Stable" else "#E94F37"
+            self.stability_status_label.setText(f"Stability Margin: {margin:.2f} m ({status})")
+            self.stability_status_label.setStyleSheet(f"font-size:14px;font-weight:bold;color:{color};")
+        self.rocket_length_input.valueChanged.connect(update_stability)
+        self.center_of_mass_input.valueChanged.connect(update_stability)
+        self.center_of_pressure_input.valueChanged.connect(update_stability)
+        update_stability()
+
+        launch_anim_layout.addWidget(stability_group)
+
+        # Rocket launch animation canvas
+        self.launch_fig = plt.Figure(figsize=(8, 6))
+        self.launch_fig.patch.set_facecolor('#F8F5E3')  # Match retro theme
+        self.launch_canvas = FigureCanvas(self.launch_fig)
+        self.launch_canvas.setMinimumSize(400, 300)
+        launch_anim_layout.addWidget(self.launch_canvas)
+
+        # Retro styled Launch button
+        self.launch_button = QtWidgets.QPushButton('Launch!')
+        self.launch_button.setStyleSheet('''
+            QPushButton {
+                background-color: #E94F37;
+                border: 2px solid #3C2F1E;
+                border-radius: 10px;
+                padding: 12px 32px;
+                font-weight: bold;
+                font-size: 20px;
+                color: #F8F5E3;
+                margin-top: 16px;
+            }
+            QPushButton:hover {
+                background-color: #FFD447;
+                color: #3C2F1E;
+                border: 2px solid #E94F37;
+            }
+        ''')
+        self.launch_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.launch_button.clicked.connect(self.start_launch_animation)
+        launch_anim_layout.addWidget(self.launch_button, alignment=QtCore.Qt.AlignCenter)
+
+        # Animation variables
+        self.launch_time = 0.0
+        self.is_launching = False
+        self.launch_timer = QtCore.QTimer()
+        self.launch_timer.timeout.connect(self.update_launch_frame)
+
+        def update_launch_animation():
+            """Update static preview of launch trajectory using real simulation parameters"""
+            if self.is_launching:
+                return  # Don't update static view during animation
+                
+            ax = self.launch_fig.gca()
+            ax.clear()
+            
+            # Get rocket parameters from Simulation tab
+            try:
+                m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd = self.get_inputs_for_simulation()
+                if m <= 0 or Cd <= 0 or A <= 0 or rho <= 0:
+                    raise ValueError("Invalid simulation parameters")
+            except:
+                # Fallback to default values if simulation inputs are invalid
+                m, Cd, A, rho = 5.0, 0.7, 0.004560, 1.225
+            
+            # Get wind and stability parameters
+            wind_speed = self.wind_speed_input.value()
+            wind_dir_deg = self.wind_direction_input.value()
+            margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
+            stable = margin > 0.05
+            color = '#2E8B57' if stable else '#E94F37'
+            
+            import math
+            from scipy.interpolate import interp1d
+            
+            # Setup thrust curve data
+            thrust_data = []
+            if hasattr(self, 'thrust_curve_path') and self.thrust_curve_path:
+                # Load thrust curve from file
+                import csv
+                try:
+                    with open(self.thrust_curve_path, newline='') as csvfile:
+                        reader = csv.reader(csvfile)
+                        for row in reader:
+                            if not row or len(row) < 2:
+                                continue
+                            try:
+                                t_thrust = float(row[0])
+                                thrust = float(row[1])
+                                thrust_data.append((t_thrust, thrust))
+                            except:
+                                continue
+                except:
+                    thrust_data = []
+            
+            if not thrust_data:
+                # Default thrust curve
+                thrust_data = [
+                    (0.124, 816.849), (0.375, 796.043), (0.626, 781.861), (0.877, 767.440),
+                    (1.129, 759.627), (1.380, 735.948), (1.631, 714.454), (1.883, 701.582),
+                    (2.134, 674.667), (2.385, 656.493), (2.637, 636.076), (2.889, 612.409),
+                    (3.140, 587.801), (3.391, 567.170), (3.642, 559.971), (3.894, 534.157),
+                    (4.145, 444.562), (4.396, 280.510), (4.648, 216.702), (4.899, 163.136),
+                    (5.150, 120.571), (5.402, 86.544), (5.653, 59.990), (5.904, 39.527),
+                    (6.156, 25.914), (6.408, 0.000)
+                ]
+            
+            times_thrust, thrusts = zip(*thrust_data)
+            thrust_func = interp1d(times_thrust, thrusts, bounds_error=False, fill_value=0.0)
+            burn_time = times_thrust[-1]
+            
+            # Simulate trajectory preview using real physics
+            g = 9.81
+            dt = 0.1  # Time step for preview
+            max_time = 15.0  # Preview up to 15 seconds
+            
+            # Initialize
+            velocity = 0.0
+            altitude = 0.0
+            x_pos = 0.0
+            mass = m
+            
+            times = []
+            x_traj = []
+            y_traj = []
+            
+            # Wind drift
+            drift_factor = wind_speed * 0.01
+            angle_rad = wind_dir_deg * math.pi / 180
+            x_drift_per_sec = drift_factor * math.cos(angle_rad)
+            
+            t = 0
+            while t < max_time and altitude >= 0:
+                times.append(t)
+                x_traj.append(x_pos)
+                y_traj.append(altitude)
+                
+                # Get thrust at current time
+                current_thrust = float(thrust_func(t)) if t <= burn_time else 0.0
+                
+                # Calculate drag force
+                drag_force = 0.5 * rho * (velocity ** 2) * Cd * A if velocity > 0 else 0
+                
+                # Net force and acceleration
+                net_force = current_thrust - drag_force - (mass * g)
+                acceleration = net_force / mass
+                
+                # Add instability
+                if not stable:
+                    wobble = 0.3 * math.sin(t * 8) * (1 + t * 0.05)
+                    acceleration += wobble
+                
+                # Update motion
+                velocity += acceleration * dt
+                altitude += velocity * dt
+                x_pos += x_drift_per_sec * dt
+                
+                if altitude < 0:
+                    altitude = 0
+                    break
+                    
+                t += dt
+            
+            # Plot trajectory
+            ax.plot(x_traj, y_traj, '--', color=color, alpha=0.7, linewidth=2, label='Predicted Path')
+            
+            # Draw rocket at launch pad
+            ax.plot([0], [0], color=color, marker='^', markersize=15, label=f'Rocket ({"Stable" if stable else "Unstable"})')
+            
+            # Draw wind arrow if there's wind
+            if wind_speed > 0:
+                ax.arrow(-0.5, 0.2, x_drift_per_sec * 50, 0, 
+                        head_width=0.15, head_length=0.15, 
+                        fc='#4682B4', ec='#4682B4', linewidth=3, 
+                        label=f'Wind: {wind_speed:.1f} m/s')
+            
+            # Auto-scale based on trajectory
+            if x_traj and y_traj:
+                max_x = max(max(x_traj), abs(min(x_traj)))
+                max_y = max(y_traj)
+                ax.set_xlim(-max(2, max_x * 1.2), max(2, max_x * 1.2))
+                ax.set_ylim(0, max(3, max_y * 1.1))
+            else:
+                ax.set_xlim(-2, 2)
+                ax.set_ylim(0, 3)
+            
+            ax.set_xlabel('Drift (m)', color='#3C2F1E')
+            ax.set_ylabel('Altitude (m)', color='#3C2F1E')
+            ax.grid(True, alpha=0.3, color='#BCA16A')
+            ax.legend(loc='upper left')
+            ax.set_facecolor('#FDF6E3')  # Light beige background
+            
+            # Add stability warning text
+            if not stable:
+                ax.text(0, 2.5, 'UNSTABLE ROCKET!', 
+                       ha='center', va='center', fontsize=16, 
+                       color='red', fontweight='bold',
+                       bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.8))
+            
+            # Force canvas to update
+            self.launch_canvas.draw()
+
+        # Connect all relevant inputs to update animation
+        self.wind_speed_input.valueChanged.connect(update_launch_animation)
+        self.wind_direction_input.valueChanged.connect(update_launch_animation)
+        self.center_of_mass_input.valueChanged.connect(update_launch_animation)
+        self.center_of_pressure_input.valueChanged.connect(update_launch_animation)
+        self.rocket_length_input.valueChanged.connect(update_launch_animation)
+        
+        # Initial animation update
+        update_launch_animation()
+
+        self.tabs.addTab(launch_anim_tab, "Launch")
+
         main_layout.addWidget(self.tabs)
         self.setLayout(main_layout)
 
@@ -384,10 +655,287 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 self.anim_pause_button.setText('Pause')
                 self._fbd_timer.start(self.anim_speed_slider.value())
 
+    def start_launch_animation(self):
+        """Start the rocket launch animation"""
+        if self.is_launching:
+            return
+            
+        # Reset physics variables for new launch
+        self.launch_velocity = 0.0
+        self.launch_altitude = 0.0
+        self.launch_x_pos = 0.0
+        self.position_history = []  # Reset trail
+        self.prev_acceleration = 0.0  # Reset acceleration smoothing
+        
+        # Reset camera smoothing
+        self.smooth_center_x = 0.0
+        self.smooth_center_y = 1.5
+        self.smooth_zoom = 1.0
+        self.smooth_flame_intensity = 0.0
+        try:
+            m, _, _, _, _, _, _, _, _, _, _, _ = self.get_inputs_for_simulation()
+            self.launch_mass = m
+        except:
+            self.launch_mass = 5.0  # Default mass
+            
+        self.is_launching = True
+        self.launch_time = 0.0
+        self.launch_button.setText('Launching...')
+        self.launch_button.setEnabled(False)
+        self.launch_timer.start(33)  # ~30fps for smoother animation (was 50ms/20fps)
+
+    def update_launch_frame(self):
+        """Update each frame of the launch animation using real simulation parameters"""
+        ax = self.launch_fig.gca()
+        ax.clear()
+        
+        # Get rocket parameters from Simulation tab
+        try:
+            m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd = self.get_inputs_for_simulation()
+            if m <= 0 or Cd <= 0 or A <= 0 or rho <= 0:
+                raise ValueError("Invalid simulation parameters")
+        except:
+            # Fallback to default values if simulation inputs are invalid
+            m, Cd, A, rho = 5.0, 0.7, 0.004560, 1.225
+        
+        # Get wind and stability parameters
+        wind_speed = self.wind_speed_input.value()
+        wind_dir_deg = self.wind_direction_input.value()
+        margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
+        stable = margin > 0.05
+        color = '#2E8B57' if stable else '#E94F37'
+        
+        import math
+        from scipy.interpolate import interp1d
+        
+        # Setup thrust curve data (same as simulation.py)
+        thrust_data = []
+        if hasattr(self, 'thrust_curve_path') and self.thrust_curve_path:
+            # Load thrust curve from file
+            import csv
+            try:
+                with open(self.thrust_curve_path, newline='') as csvfile:
+                    reader = csv.reader(csvfile)
+                    for row in reader:
+                        if not row or len(row) < 2:
+                            continue
+                        try:
+                            t_thrust = float(row[0])
+                            thrust = float(row[1])
+                            thrust_data.append((t_thrust, thrust))
+                        except:
+                            continue
+            except:
+                thrust_data = []
+        
+        if not thrust_data:
+            # Default thrust curve
+            thrust_data = [
+                (0.124, 816.849), (0.375, 796.043), (0.626, 781.861), (0.877, 767.440),
+                (1.129, 759.627), (1.380, 735.948), (1.631, 714.454), (1.883, 701.582),
+                (2.134, 674.667), (2.385, 656.493), (2.637, 636.076), (2.889, 612.409),
+                (3.140, 587.801), (3.391, 567.170), (3.642, 559.971), (3.894, 534.157),
+                (4.145, 444.562), (4.396, 280.510), (4.648, 216.702), (4.899, 163.136),
+                (5.150, 120.571), (5.402, 86.544), (5.653, 59.990), (5.904, 39.527),
+                (6.156, 25.914), (6.408, 0.000)
+            ]
+        
+        times_thrust, thrusts = zip(*thrust_data)
+        thrust_func = interp1d(times_thrust, thrusts, bounds_error=False, fill_value=0.0)
+        burn_time = times_thrust[-1]
+        
+        # Current simulation time
+        t = self.launch_time
+        
+        # Get thrust at current time
+        current_thrust = float(thrust_func(t)) if t <= burn_time else 0.0
+        
+        # Physics simulation with real parameters
+        g = 9.81
+        
+        # Wind drift calculation
+        drift_factor = wind_speed * 0.01  # Scale for demo
+        angle_rad = wind_dir_deg * math.pi / 180
+        x_drift_per_sec = drift_factor * math.cos(angle_rad)
+        y_drift_per_sec = drift_factor * math.sin(angle_rad)
+        
+        # Integrate motion using simplified physics with smoothing
+        # Use stored velocity and position if available, otherwise initialize
+        if not hasattr(self, 'launch_velocity'):
+            self.launch_velocity = 0.0
+            self.launch_altitude = 0.0
+            self.launch_x_pos = 0.0
+            self.launch_mass = m
+            self.prev_acceleration = 0.0  # For smoothing
+            
+        dt = 0.025  # Smaller time step for smoother physics (25ms)
+        
+        # Perform multiple small integration steps for smoother motion
+        for _ in range(2):  # 2 steps of 25ms each = 50ms total
+            # Calculate drag force: F_drag = 0.5 * rho * v^2 * Cd * A
+            drag_force = 0.5 * rho * (self.launch_velocity ** 2) * Cd * A if self.launch_velocity > 0 else 0
+            
+            # Net force: thrust - drag - weight
+            net_force = current_thrust - drag_force - (self.launch_mass * g)
+            acceleration = net_force / self.launch_mass
+            
+            # Add instability if rocket is unstable (but smoother)
+            if not stable:
+                # Smoother wobble that increases with time and velocity
+                wobble_magnitude = 0.3 * math.sin(t * 8) * (1 + t * 0.05)
+                acceleration += wobble_magnitude
+            
+            # Smooth acceleration changes to avoid jerky motion
+            acceleration_smoothing = 0.3
+            self.prev_acceleration += (acceleration - self.prev_acceleration) * acceleration_smoothing
+            
+            # Update velocity and position with smoothed acceleration
+            self.launch_velocity += self.prev_acceleration * dt
+            self.launch_altitude += self.launch_velocity * dt
+            
+            # Add wind drift (smaller steps for smoother movement)
+            self.launch_x_pos += x_drift_per_sec * dt
+            
+            # Don't go below ground
+            if self.launch_altitude < 0:
+                self.launch_altitude = 0
+                self.launch_velocity = max(0, self.launch_velocity * -0.3)  # Bounce with energy loss
+        
+        # Use calculated positions
+        x_pos = self.launch_x_pos
+        y_pos = self.launch_altitude
+            
+        y_pos = max(0, y_pos)  # Don't go below ground
+        
+        # Calculate camera following parameters with smoothing
+        # Smooth camera movement using exponential moving average
+        if not hasattr(self, 'smooth_center_x'):
+            self.smooth_center_x = x_pos
+            self.smooth_center_y = y_pos
+            self.smooth_zoom = 1.0
+        
+        # Camera smoothing parameters
+        camera_smoothing = 0.15  # Lower = smoother, higher = more responsive
+        zoom_smoothing = 0.08    # Slower zoom changes for smoother experience
+        
+        # Smooth camera position
+        self.smooth_center_x += (x_pos - self.smooth_center_x) * camera_smoothing
+        target_center_y = max(1.5, y_pos)
+        self.smooth_center_y += (target_center_y - self.smooth_center_y) * camera_smoothing
+        
+        # Smooth zoom with altitude
+        target_zoom = max(1.0, y_pos * 0.35)  # Reduced zoom rate for smoother feel
+        self.smooth_zoom += (target_zoom - self.smooth_zoom) * zoom_smoothing
+        
+        # Apply smoothed values
+        center_x = self.smooth_center_x
+        center_y = self.smooth_center_y
+        view_width = 2 * self.smooth_zoom
+        view_height = 2 * self.smooth_zoom
+        
+        # Draw trajectory trail using stored positions
+        if not hasattr(self, 'position_history'):
+            self.position_history = []
+        
+        # Store current position
+        self.position_history.append((x_pos, y_pos))
+        
+        # Keep only last 20 positions for trail
+        if len(self.position_history) > 20:
+            self.position_history = self.position_history[-20:]
+        
+        # Draw trail with fading alpha
+        for i in range(len(self.position_history)-1):
+            alpha = (i+1) / len(self.position_history) * 0.7
+            x1, y1 = self.position_history[i]
+            x2, y2 = self.position_history[i+1]
+            ax.plot([x1, x2], [y1, y2], 
+                   color=color, alpha=alpha, linewidth=2)
+        
+        # Draw current rocket position
+        if y_pos > 0:
+            ax.plot([x_pos], [y_pos], color=color, marker='^', markersize=20, 
+                   markeredgecolor='black', markeredgewidth=2)
+            
+            # Add thrust flame based on actual thrust with smoothing
+            if not hasattr(self, 'smooth_flame_intensity'):
+                self.smooth_flame_intensity = 0.0
+                
+            max_thrust = max(thrusts) if thrusts else 1000  # Normalize flame size
+            target_flame_intensity = current_thrust / max_thrust if max_thrust > 0 else 0
+            
+            # Smooth flame intensity changes
+            flame_smoothing = 0.2
+            self.smooth_flame_intensity += (target_flame_intensity - self.smooth_flame_intensity) * flame_smoothing
+            
+            flame_length = self.smooth_flame_intensity * 0.5  # Scale flame length
+            if flame_length > 0.02:  # Only show flame if significant thrust
+                # Add slight flame flicker for realism
+                flicker = 1.0 + 0.1 * math.sin(t * 25) * self.smooth_flame_intensity
+                actual_flame_length = flame_length * flicker
+                
+                ax.plot([x_pos, x_pos], [y_pos - 0.1, y_pos - 0.1 - actual_flame_length], 
+                       color='orange', linewidth=max(1, int(8 * self.smooth_flame_intensity)), alpha=0.8)
+                ax.plot([x_pos, x_pos], [y_pos - 0.1, y_pos - 0.1 - actual_flame_length * 0.7], 
+                       color='yellow', linewidth=max(1, int(4 * self.smooth_flame_intensity)), alpha=0.9)
+        
+        # Draw wind arrow
+        if wind_speed > 0:
+            ax.arrow(-0.5, y_pos + 0.2, x_drift_per_sec * 20, 0, 
+                    head_width=0.15, head_length=0.15, 
+                    fc='#4682B4', ec='#4682B4', linewidth=3, alpha=0.7)
+        
+        # Draw ground line and launch pad
+        ground_x = [center_x - view_width, center_x + view_width]
+        ground_y = [0, 0]
+        ax.plot(ground_x, ground_y, color='#8B4513', linewidth=4, label='Ground')
+        
+        # Launch pad at origin
+        ax.plot([0], [0], 's', color='gray', markersize=15, label='Launch Pad')
+        
+        # Styling with dynamic camera following
+        ax.set_xlim(center_x - view_width, center_x + view_width)
+        ax.set_ylim(center_y - view_height*0.3, center_y + view_height*0.7)
+        ax.set_title(f'Rocket Launch - T+{t:.1f}s - Alt: {y_pos:.1f}m', fontsize=14, fontweight='bold', color='#3C2F1E')
+        ax.set_xlabel('Drift (m)', color='#3C2F1E')
+        ax.set_ylabel('Altitude (m)', color='#3C2F1E')
+        ax.grid(True, alpha=0.3, color='#BCA16A')
+        ax.set_facecolor('#FDF6E3')
+        
+        # Add status text
+        if not stable and y_pos > 0:
+            ax.text(0, 2.7, 'UNSTABLE!', ha='center', va='center', 
+                   fontsize=12, color='red', fontweight='bold',
+                   bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.8))
+        
+        if y_pos <= 0 and t > 1:
+            ax.text(x_pos, 0.3, 'IMPACT!', ha='center', va='center', 
+                   fontsize=14, color='red', fontweight='bold',
+                   bbox=dict(boxstyle='round', facecolor='orange', alpha=0.9))
+        
+        self.launch_canvas.draw()
+        
+        # Update time
+        self.launch_time += 0.05
+        
+        # End animation after 8 seconds or if rocket hits ground
+        if self.launch_time > 8 or (y_pos <= 0 and t > 1):
+            self.launch_timer.stop()
+            self.is_launching = False
+            self.launch_button.setText('Launch Again!')
+            self.launch_button.setEnabled(True)
+
     def set_fbd_anim_speed(self):
         if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
             if not self.anim_pause_button.isChecked():
-                self._fbd_timer.start(self.anim_speed_slider.value())
+                # Map slider value (0-100) to speed multiplier (0.5x-5x)
+                slider_val = self.anim_speed_slider.value()
+                # 0 = 0.5x, 50 = 1x, 100 = 5x
+                speed_mult = 0.5 + (slider_val / 100.0) * 4.5
+                # Base interval (ms) for 1x speed (e.g., 15ms for smoother animation)
+                base_interval = 15
+                interval = int(base_interval / speed_mult)
+                self._fbd_timer.start(interval)
 
     def update_conversions(self, field):
         # Only convert value if the user changes the unit, not on load
@@ -681,42 +1229,33 @@ class RocketSimulationUI(QtWidgets.QWidget):
                     pass
         self._fbd_artists = []
 
-        # Rocket and force arrow parameters
-        rocket_width = 10
-        rocket_height = 100
-        nose_height = 10
-        fin_height = 3
-        fin_width = 3
-
         # Get time and altitude arrays
         times = [r['time'] for r in results]
         altitudes = [r['altitude'] for r in results]
+
+        # Fixed rocket size in data units (e.g., 2 seconds wide, 10 meters tall)
+        rocket_width = 2.0  # seconds (x-axis units)
+        rocket_height = 10.0  # meters (y-axis units)
 
         # Initial position (first point on curve)
         x_pos = times[0]
         y_pos = altitudes[0]
 
-        # Body
-        body = mpatches.Rectangle((x_pos - rocket_width/2, y_pos), rocket_width, rocket_height, color='#E94F37', zorder=10)
-        ax.add_patch(body)
-        # Nose cone (triangle)
-        nose = mpatches.Polygon([[x_pos - rocket_width/2, y_pos + rocket_height],
-                                 [x_pos + rocket_width/2, y_pos + rocket_height],
-                                 [x_pos, y_pos + rocket_height + nose_height]],
-                                 closed=True, color='#FFD447', zorder=11)
-        ax.add_patch(nose)
-        # Left fin
-        left_fin = mpatches.Polygon([[x_pos - rocket_width/2, y_pos],
-                                     [x_pos - rocket_width/2 - fin_width, y_pos - fin_height],
-                                     [x_pos - rocket_width/2, y_pos + 0.03]],
-                                     closed=True, color='#3C2F1E', zorder=9)
-        ax.add_patch(left_fin)
-        # Right fin
-        right_fin = mpatches.Polygon([[x_pos + rocket_width/2, y_pos],
-                                      [x_pos + rocket_width/2 + fin_width, y_pos - fin_height],
-                                      [x_pos + rocket_width/2, y_pos + 0.03]],
-                                      closed=True, color='#3C2F1E', zorder=9)
-        ax.add_patch(right_fin)
+        import matplotlib.image as mpimg
+        from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+        rocket_img = mpimg.imread(os.path.join(os.path.dirname(__file__), 'Rocket.png'))
+        self._rocket_img = rocket_img  # Store for animation
+        self._rocket_zoom = 0.08
+        imagebox = OffsetImage(rocket_img, zoom=self._rocket_zoom)  # Adjust zoom for desired size
+        rocket_artist = AnnotationBbox(
+            imagebox,
+            (x_pos, y_pos),
+            frameon=False,
+            pad=0,
+            zorder=15
+        )
+        ax.add_artist(rocket_artist)
+        self._rocket_artist = rocket_artist
 
         # Offset for force arrows (to the right of the rocket)
         arrow_x_offset = rocket_width * 1.5
@@ -724,9 +1263,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Force arrows (Line2D)
         thrust_line, = ax.plot([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos, y_pos], color='g', linewidth=3, marker='^', markersize=10, label='Thrust', zorder=12)
         drag_line, = ax.plot([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height, y_pos + rocket_height], color='r', linewidth=3, marker='v', markersize=10, label='Drag', zorder=12)
-        gravity_line, = ax.plot([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height/2, y_pos + rocket_height/2 - 0.08], color='b', linewidth=3, marker='v', markersize=10, label='Gravity', zorder=12)
+        gravity_line, = ax.plot([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height/2, y_pos + rocket_height/2 - rocket_height*0.08], color='b', linewidth=3, marker='v', markersize=10, label='Gravity', zorder=12)
 
-        self._fbd_artists = [body, nose, left_fin, right_fin, thrust_line, drag_line, gravity_line]
+        self._fbd_artists = [rocket_artist, thrust_line, drag_line, gravity_line]
 
         # Precompute max values for normalization
         max_thrust = max((r['thrust'] for r in results if r['thrust'] > 0), default=1)
@@ -738,66 +1277,134 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
         from utils import get_flight_phase
         def fbd_anim_step():
+            # Interpolate between data points for smooth animation
             frame = self._fbd_frame
-            if frame >= len(self._fbd_results):
+            n_frames = len(self._fbd_results)
+            subframe = getattr(self, '_fbd_subframe', 0.0)
+            subframes_per_frame = 5
+            if frame >= n_frames - 1:
                 self._fbd_timer.stop()
-                # Set progress bar to 100% and "Landed" at end
                 self.phase_progress.setValue(100)
                 self.phase_progress.setFormat('LANDED')
                 self.phase_progress.setStyleSheet(self.phase_progress.styleSheet() + 'QProgressBar::chunk { background-color: #3C2F1E; color: #FFD447; }')
                 return
-            result = self._fbd_results[frame]
-            prev_result = self._fbd_results[frame-1] if frame > 0 else None
-            x_pos = result['time']
-            y_pos = result['altitude']
-            # Move rocket
-            body.set_xy((x_pos - rocket_width/2, y_pos))
-            nose.set_xy([[x_pos - rocket_width/2, y_pos + rocket_height],
-                         [x_pos + rocket_width/2, y_pos + rocket_height],
-                         [x_pos, y_pos + rocket_height + nose_height]])
-            left_fin.set_xy([[x_pos - rocket_width/2, y_pos],
-                             [x_pos - rocket_width/2 - fin_width, y_pos - fin_height],
-                             [x_pos - rocket_width/2, y_pos + 0.03]])
-            right_fin.set_xy([[x_pos + rocket_width/2, y_pos],
-                              [x_pos + rocket_width/2 + fin_width, y_pos - fin_height],
-                              [x_pos + rocket_width/2, y_pos + 0.03]])
+            result_a = self._fbd_results[frame]
+            result_b = self._fbd_results[min(frame+1, n_frames-1)]
+            t_a = result_a['time']
+            t_b = result_b['time']
+            alt_a = result_a['altitude']
+            alt_b = result_b['altitude']
+            frac = subframe / subframes_per_frame
+            x_pos = t_a + (t_b - t_a) * frac
+            y_pos = alt_a + (alt_b - alt_a) * frac
+            # Interpolate velocity vector for angle
+            if frame > 0:
+                prev_a = self._fbd_results[frame-1]
+                dx_a = t_a - prev_a['time']
+                dy_a = alt_a - prev_a['altitude']
+                dx_b = t_b - t_a
+                dy_b = alt_b - alt_a
+                dx = dx_a + (dx_b - dx_a) * frac
+                dy = dy_a + (dy_b - dy_a) * frac
+                angle = np.degrees(np.arctan2(dy, dx))
+            else:
+                angle = 90.0
+            # Advance subframe
+            subframe += 1
+            if subframe >= subframes_per_frame:
+                subframe = 0
+                self._fbd_frame += 1
+            self._fbd_subframe = subframe
+
+            # Track apogee and chute deployment
+            altitudes = [r['altitude'] for r in self._fbd_results]
+            apogee_frame = np.argmax(altitudes)
+            chute_frame = next((i for i, r in enumerate(self._fbd_results) if r.get('chute_deployed')), None)
+
+            # Flip rocket at apogee (point down)
+            if frame >= apogee_frame and (chute_frame is None or frame < chute_frame):
+                angle += 180.0
+            # Flip back when chute deploys
+            if chute_frame is not None and frame >= chute_frame:
+                angle -= 180.0
+
+            # Adjust for image orientation (e.g., subtract 90° if rocket.png points right)
+            angle -= 90.0
+
+            # Cache rotated images for performance (round to nearest 5°)
+            cache_angle = int(round(angle / 5.0) * 5)
+            if cache_angle not in self._rocket_img_cache:
+                import scipy.ndimage
+                self._rocket_img_cache[cache_angle] = scipy.ndimage.rotate(self._rocket_img, cache_angle, reshape=False, mode='nearest')
+            rotated_img = self._rocket_img_cache[cache_angle]
+            # Clip image data to valid range for imshow
+            if rotated_img.dtype == float:
+                rotated_img = np.clip(rotated_img, 0, 1)
+            else:
+                rotated_img = np.clip(rotated_img, 0, 255)
+            rotated_imagebox = OffsetImage(rotated_img, zoom=self._rocket_zoom)
+            # Remove previous rocket image
+            try:
+                self._rocket_artist.remove()
+            except Exception:
+                pass
+            new_rocket_artist = AnnotationBbox(
+                rotated_imagebox,
+                (x_pos, y_pos),
+                frameon=False,
+                pad=0,
+                zorder=15
+            )
+            ax.add_artist(new_rocket_artist)
+            self._rocket_artist = new_rocket_artist
             # Normalize arrow lengths
-            thrust_val = result['thrust'] / max_thrust if max_thrust else 0
-            drag_val = result['drag'] / max_drag if max_drag else 0
+            thrust_a = result_a['thrust']
+            thrust_b = result_b['thrust']
+            drag_a = result_a['drag']
+            drag_b = result_b['drag']
+            thrust_val = (thrust_a + (thrust_b - thrust_a) * frac) / max_thrust if max_thrust else 0
+            drag_val = (drag_a + (drag_b - drag_a) * frac) / max_drag if max_drag else 0
             # Update thrust arrow (upwards from rocket base)
             thrust_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos, y_pos + thrust_val * 0.2])
             # Update drag arrow (downwards from rocket top)
             drag_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height, y_pos + rocket_height - drag_val * 0.2])
             # Gravity arrow (fixed length, always down from rocket center)
-            gravity_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height/2, y_pos + rocket_height/2 - 0.08])
+            gravity_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos + rocket_height/2, y_pos + rocket_height/2 - rocket_height*0.08])
+
+            # Redraw canvas so rocket and arrows move together
+            self.canvas.draw_idle()
 
             # --- Live statistics update ---
             # Units
+            vel_a = result_a['velocity']
+            vel_b = result_b['velocity']
+            mass_a = result_a['mass']
+            mass_b = result_b['mass']
             if self.unit_select.currentIndex() == 1:  # Imperial
-                alt_disp = result['altitude'] * 3.28084
+                alt_disp = y_pos * 3.28084
                 alt_unit = 'ft'
-                vel_disp = result['velocity'] * 3.28084
+                vel_disp = (vel_a + (vel_b - vel_a) * frac) * 3.28084
                 vel_unit = 'ft/s'
-                mass_disp = result['mass'] * 2.20462
+                mass_disp = (mass_a + (mass_b - mass_a) * frac) * 2.20462
                 mass_unit = 'lb'
-                thrust_disp = result['thrust'] * 0.224809
+                thrust_disp = (thrust_a + (thrust_b - thrust_a) * frac) * 0.224809
                 thrust_unit = 'lbf'
-                drag_disp = result['drag'] * 0.224809
+                drag_disp = (drag_a + (drag_b - drag_a) * frac) * 0.224809
                 drag_unit = 'lbf'
             else:
-                alt_disp = result['altitude']
+                alt_disp = y_pos
                 alt_unit = 'm'
-                vel_disp = result['velocity']
+                vel_disp = vel_a + (vel_b - vel_a) * frac
                 vel_unit = 'm/s'
-                mass_disp = result['mass']
+                mass_disp = mass_a + (mass_b - mass_a) * frac
                 mass_unit = 'kg'
-                thrust_disp = result['thrust']
+                thrust_disp = thrust_a + (thrust_b - thrust_a) * frac
                 thrust_unit = 'N'
-                drag_disp = result['drag']
+                drag_disp = drag_a + (drag_b - drag_a) * frac
                 drag_unit = 'N'
             # Mach number
             try:
-                mach = result['velocity'] / self.get_local_speed_of_sound()
+                mach = (vel_a + (vel_b - vel_a) * frac) / self.get_local_speed_of_sound()
             except Exception:
                 mach = 0.0
             # --- Dragstrip-style max time stat (live) ---
@@ -821,7 +1428,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         <tr>
             <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 1vw 2vw 2vw; border-right:4px solid #FFD447;'>
                 <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>TIME</td><td style='text-align:center;'>{result['time']:.2f} S</td></tr>
+                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>TIME</td><td style='text-align:center;'>{x_pos:.2f} S</td></tr>
                     <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>ALTITUDE</td><td style='text-align:center;'>{alt_disp:.2f} {alt_unit.upper()}</td></tr>
                     <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>VELOCITY</td><td style='text-align:center;'>{vel_disp:.2f} {vel_unit.upper()}</td></tr>
                     <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MACH</td><td style='text-align:center;'>{mach:.2f}</td></tr>
@@ -848,7 +1455,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
             # --- Progress bar update ---
             percent = int(100 * frame / (len(self._fbd_results)-1))
-            phase = get_flight_phase(result, prev_result).upper()
+            phase = get_flight_phase(result_a, result_b).upper()
             self.phase_progress.setValue(percent)
             # Inverse color for phase text inside bar
             if phase in ['LIFTOFF', 'POWERED ASCENT', 'COAST', 'APOGEE', 'DESCENT', 'CHUTE DESCENT']:
@@ -1047,8 +1654,32 @@ class RocketSimulationUI(QtWidgets.QWidget):
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     app.setStyleSheet(retro_style)
+
+
+    # Splash screen with reliability checks
+    gif_path = os.path.join(os.path.dirname(__file__), 'jarvis.gif')
+    splash_movie = QtGui.QMovie(gif_path)
+    if not splash_movie.isValid():
+        print(f"Could not load splash GIF: {gif_path}")
+    splash_label = QtWidgets.QLabel()
+    splash_label.setMovie(splash_movie)
+    splash_label.setWindowFlags(QtCore.Qt.SplashScreen | QtCore.Qt.FramelessWindowHint)
+    splash_label.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+
+    splash_movie.start()
+    splash_label.movie = splash_movie  # Prevent garbage collection
+    splash_label.show()
+    app.processEvents()
+
+    gif_path = os.path.join(os.path.dirname(__file__), 'Jarvis.gif')    # Show splash for 3 seconds, then close and show main window
+    def show_main():
+        splash_label.close()
+        splash_movie.stop()
+        window.show()
+
     window = RocketSimulationUI()
-    window.show()
+    QtCore.QTimer.singleShot(5000, show_main)
+
     sys.exit(app.exec_())
 
 def excepthook(type_, value, tb):
