@@ -402,7 +402,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.launch_canvas.setMinimumSize(400, 300)
         launch_anim_layout.addWidget(self.launch_canvas)
 
-        # Retro styled Launch button
+        # Retro styled Launch/Stop buttons
+        buttons_row = QtWidgets.QHBoxLayout()
         self.launch_button = QtWidgets.QPushButton('Launch!')
         self.launch_button.setStyleSheet('''
             QPushButton {
@@ -423,7 +424,31 @@ class RocketSimulationUI(QtWidgets.QWidget):
         ''')
         self.launch_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
         self.launch_button.clicked.connect(self.start_launch_animation)
-        launch_anim_layout.addWidget(self.launch_button, alignment=QtCore.Qt.AlignCenter)
+
+        self.stop_button = QtWidgets.QPushButton('Stop')
+        self.stop_button.setStyleSheet('''
+            QPushButton {
+                background-color: #3C2F1E;
+                border: 2px solid #BCA16A;
+                border-radius: 10px;
+                padding: 12px 24px;
+                font-weight: bold;
+                font-size: 18px;
+                color: #FFD447;
+                margin-top: 16px;
+            }
+            QPushButton:hover {
+                background-color: #BCA16A;
+                color: #3C2F1E;
+                border: 2px solid #3C2F1E;
+            }
+        ''')
+        self.stop_button.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.stop_button.clicked.connect(self.stop_launch_animation)
+
+        buttons_row.addWidget(self.launch_button)
+        buttons_row.addWidget(self.stop_button)
+        launch_anim_layout.addLayout(buttons_row)
 
         # Animation variables
         self.launch_time = 0.0
@@ -664,6 +689,17 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.launch_velocity = 0.0
         self.launch_altitude = 0.0
         self.launch_x_pos = 0.0
+        self.launch_x_vel = 0.0
+        # Angular state for full rotation
+        self.launch_angle = 0.0              # radians, 0 = pointing up
+        self.launch_angular_velocity = 0.0   # radians/sec
+        # Parachute and apogee state
+        self.chute_deployed = False
+        self.chute_open_factor = 0.0  # 0..1 gradually opens when deployed
+        self.apogee_marked = False
+        self.apogee_pos = None
+        self.apogee_flash_frames = 0
+        self.launch_prev_velocity = 0.0
         self.position_history = []  # Reset trail
         self.prev_acceleration = 0.0  # Reset acceleration smoothing
         
@@ -684,6 +720,23 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.launch_button.setEnabled(False)
         self.launch_timer.start(33)  # ~30fps for smoother animation (was 50ms/20fps)
 
+    def stop_launch_animation(self):
+        """Stop the rocket launch animation and reset UI state."""
+        try:
+            if hasattr(self, 'launch_timer'):
+                self.launch_timer.stop()
+            self.is_launching = False
+            self.launch_button.setText('Launch!')
+            self.launch_button.setEnabled(True)
+            # Optional: clear trail and reset camera smoothing to defaults
+            self.position_history = []
+            self.smooth_center_x = 0.0
+            self.smooth_center_y = 1.5
+            self.smooth_zoom = 1.0
+            self.smooth_flame_intensity = 0.0
+        except Exception:
+            pass
+
     def update_launch_frame(self):
         """Update each frame of the launch animation using real simulation parameters"""
         ax = self.launch_fig.gca()
@@ -703,6 +756,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
         wind_dir_deg = self.wind_direction_input.value()
         margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
         stable = margin > 0.05
+        # Instability gain (0..1) grows as margin goes below threshold
+        instability_gain = 0.0
+        if not stable:
+            try:
+                instability_gain = min(1.0, max(0.0, (0.05 - margin) / 0.05))
+            except Exception:
+                instability_gain = 1.0
         color = '#2E8B57' if stable else '#E94F37'
         
         import math
@@ -765,10 +825,34 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.launch_velocity = 0.0
             self.launch_altitude = 0.0
             self.launch_x_pos = 0.0
+            self.launch_x_vel = 0.0
             self.launch_mass = m
             self.prev_acceleration = 0.0  # For smoothing
+            # Initialize angular state if missing
+            self.launch_angle = 0.0
+            self.launch_angular_velocity = 0.0
+            # Parachute/apogee defaults
+            self.chute_deployed = False
+            self.chute_open_factor = 0.0
+            self.apogee_marked = False
+            self.apogee_pos = None
+            self.apogee_flash_frames = 0
+            self.launch_prev_velocity = 0.0
             
         dt = 0.025  # Smaller time step for smoother physics (25ms)
+
+        # Handle parachute deployment triggers (descent + below threshold altitude)
+        if not hasattr(self, 'chute_deployed'):
+            self.chute_deployed = False
+            self.chute_open_factor = 0.0
+        # Deploy only on descent below set altitude
+        try:
+            deploy_alt_threshold = max(0.0, chute_height or 0.0)
+            should_deploy = (self.launch_velocity < 0) and (self.launch_altitude <= deploy_alt_threshold)
+        except Exception:
+            should_deploy = False
+        if not self.chute_deployed and should_deploy:
+            self.chute_deployed = True
         
         # Perform multiple small integration steps for smoother motion
         for step_idx in range(2):  # 2 steps of 25ms each = 50ms total
@@ -776,26 +860,86 @@ class RocketSimulationUI(QtWidgets.QWidget):
             t_sub = t + step_idx * dt
             current_thrust_step = float(thrust_func(t_sub)) if t_sub <= burn_time else 0.0
 
-            # Calculate drag force magnitude: F_drag = 0.5 * rho * v^2 * Cd * A
+            # --- Angular dynamics (spin) ---
+            # Dynamic pressure based on total speed
+            v_total = max(0.0, (self.launch_velocity**2 + self.launch_x_vel**2) ** 0.5)
+            q_dyn = 0.5 * rho * (v_total ** 2)
+            # Torques: restoring when stable, divergent when unstable, plus damping and small turbulence
+            k_stable = 3.0
+            k_unstable = 2.0
+            k_damp = 1.2
+            torque = 0.0
+            # Angle is measured from vertical (0 = up)
+            if stable:
+                torque += -k_stable * q_dyn * self.launch_angle
+            else:
+                torque += k_unstable * q_dyn * instability_gain * self.launch_angle
+                torque += 0.4 * q_dyn * instability_gain * (random.random() - 0.5)
+            # Damping always opposes angular velocity
+            torque += -k_damp * self.launch_angular_velocity
+            # Convert torque to angular acceleration via an arbitrary inertia constant
+            I = max(0.1, m * 0.02)  # crude rotational inertia proxy
+            angular_acc = torque / I
+            # Integrate orientation
+            self.launch_angular_velocity += angular_acc * dt
+            self.launch_angle += self.launch_angular_velocity * dt
+            # Keep angle within -pi..pi for numerical stability (not limiting spin, just wrapping)
+            if self.launch_angle > math.pi:
+                self.launch_angle -= 2 * math.pi
+            elif self.launch_angle < -math.pi:
+                self.launch_angle += 2 * math.pi
+
+            # Thrust aligned with body axis
+            thrust_dir_x = math.sin(self.launch_angle)
+            thrust_dir_y = math.cos(self.launch_angle)
+            thrust_x = current_thrust_step * thrust_dir_x
+            thrust_y = current_thrust_step * thrust_dir_y
+
+            # Effective drag area with parachute (Cd*A + Cd_chute*A_chute*open)
+            drag_area_base = Cd * A
+            chute_area_term = (chute_cd * chute_size) if (chute_size and chute_cd) else 0.0
+            if self.chute_deployed:
+                # Gradually open chute
+                self.chute_open_factor = min(1.0, self.chute_open_factor + 0.12)
+            drag_area_eff = drag_area_base + (self.chute_open_factor * chute_area_term)
+
+            # Calculate vertical drag force magnitude: F_drag = 0.5 * rho * v^2 * drag_area_eff
             if self.launch_velocity != 0:
-                drag_force_mag = 0.5 * rho * (self.launch_velocity ** 2) * Cd * A
+                drag_force_mag = 0.5 * rho * (self.launch_velocity ** 2) * drag_area_eff
                 # Drag always opposes motion
                 drag_term = math.copysign(drag_force_mag, self.launch_velocity)
             else:
                 drag_term = 0.0
             
             # Net force: thrust - weight - drag(sign)
-            net_force = current_thrust_step - drag_term - (self.launch_mass * g)
+            net_force = thrust_y - drag_term - (self.launch_mass * g)
             acceleration = net_force / self.launch_mass
             
             # Add instability if rocket is unstable (stronger, includes lateral wobble)
             if not stable:
                 # Vertical wobble increases slightly with time
-                wobble_magnitude = 0.6 * math.sin(t_sub * 8.0) * (1 + min(t, 10) * 0.05)
+                wobble_magnitude = (0.8 + 1.2 * instability_gain) * math.sin(t_sub * 8.0) * (1 + min(t, 10) * 0.07)
                 acceleration += wobble_magnitude
-                # Lateral wobble to visualize instability
-                lateral_wobble = 0.2 * math.sin(t_sub * 6.0) * (1 + min(t, 10) * 0.05)
-                self.launch_x_pos += lateral_wobble * dt
+                # Lateral acceleration from thrust tilt and wobble
+                a_x = thrust_x / self.launch_mass
+                a_x += (0.8 * instability_gain) * math.sin(t_sub * (6.0 + 1.5 * instability_gain))
+                a_x += (0.4 * instability_gain) * (random.random() - 0.5)  # small noise for non-periodic motion
+                # Horizontal drag opposes lateral velocity to avoid runaway drift
+                if self.launch_x_vel != 0:
+                    drag_x_mag = 0.5 * rho * (self.launch_x_vel ** 2) * drag_area_eff
+                    drag_x_term = math.copysign(drag_x_mag, self.launch_x_vel)
+                    a_x += -drag_x_term / self.launch_mass
+                # Integrate x velocity and position
+                self.launch_x_vel += a_x * dt
+            else:
+                # When stable, lateral acceleration only from thrust alignment
+                a_x = thrust_x / self.launch_mass
+                # Horizontal drag
+                if self.launch_x_vel != 0:
+                    drag_x_mag = 0.5 * rho * (self.launch_x_vel ** 2) * drag_area_eff
+                    drag_x_term = math.copysign(drag_x_mag, self.launch_x_vel)
+                    a_x += -drag_x_term / self.launch_mass
+                self.launch_x_vel += a_x * dt
             
             # Smooth acceleration changes to avoid jerky motion
             acceleration_smoothing = 0.3
@@ -806,13 +950,24 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.launch_altitude += self.launch_velocity * dt
             
             # Add wind drift (smaller steps for smoother movement)
-            self.launch_x_pos += x_drift_per_sec * dt
+            # Combine wind drift and integrated lateral velocity
+            self.launch_x_pos += (self.launch_x_vel + x_drift_per_sec) * dt
             
             # Don't go below ground
             if self.launch_altitude < 0:
                 self.launch_altitude = 0
                 self.launch_velocity = max(0, self.launch_velocity * -0.3)  # Bounce with energy loss
         
+        # Detect apogee (sign change of vertical velocity)
+        try:
+            if (not self.apogee_marked) and (self.launch_prev_velocity > 0) and (self.launch_velocity <= 0) and (self.launch_altitude > 0.5):
+                self.apogee_marked = True
+                self.apogee_pos = (self.launch_x_pos, self.launch_altitude)
+                self.apogee_flash_frames = 30
+        except Exception:
+            pass
+        self.launch_prev_velocity = self.launch_velocity
+
         # Use calculated positions
         x_pos = self.launch_x_pos
         y_pos = self.launch_altitude
@@ -825,24 +980,43 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.smooth_center_x = x_pos
             self.smooth_center_y = y_pos
             self.smooth_zoom = 1.0
-        
+
         # Camera smoothing parameters
-        camera_smoothing = 0.15  # Lower = smoother, higher = more responsive
-        zoom_smoothing = 0.18    # Faster zoom response for a snappier feel
-        
+        camera_smoothing = 0.60  # Lower = smoother, higher = more responsive
+        zoom_smoothing = 0.8    # Much faster zoom response for a snappier feel
+
         # Smooth camera position
-        self.smooth_center_x += (x_pos - self.smooth_center_x) * camera_smoothing
+        # Follow vertically; horizontally: partial follow when unstable so drift is visible but stays in frame
+        if not stable:
+            # Widen camera follow for unstable rockets
+            target_center_x = 0.8 * x_pos
+            follow_alpha_x = 0.2
+        else:
+            target_center_x = x_pos
+            follow_alpha_x = camera_smoothing
+        self.smooth_center_x += (target_center_x - self.smooth_center_x) * follow_alpha_x
         target_center_y = max(1.5, y_pos)
         self.smooth_center_y += (target_center_y - self.smooth_center_y) * camera_smoothing
-        
-        # Smooth zoom with altitude
-        target_zoom = max(1.0, y_pos * 0.35)  # Reduced zoom rate for smoother feel
+
+        # Smooth zoom with altitude and velocity; keep rocket big on ascent
+        base_zoom = max(1.0, y_pos * 0.25 + abs(self.launch_velocity) * 0.02)
+    # Remove all zoom capping: camera always zooms out as much as needed
+        # Keep rocket visually large: blend between min zoom and physics zoom
+        min_visual_zoom = 1.2
+        if self.launch_velocity > 0:
+            # On ascent, blend so rocket stays big
+            visual_alpha = max(0.0, min(1.0, y_pos / 30.0))  # 0 at pad, 1 at 30m+
+            target_zoom = min_visual_zoom * (1 - visual_alpha) + base_zoom * visual_alpha
+        else:
+            target_zoom = base_zoom
         self.smooth_zoom += (target_zoom - self.smooth_zoom) * zoom_smoothing
-        
+
         # Apply smoothed values
         center_x = self.smooth_center_x
         center_y = self.smooth_center_y
-        view_width = 2 * self.smooth_zoom
+        # Make x zoom much slower for readability
+        x_zoom_factor = 0.35  # Lower = slower expansion, more readable
+        view_width = 2 * (self.smooth_zoom * x_zoom_factor + self.smooth_zoom * (1 - x_zoom_factor))
         view_height = 2 * self.smooth_zoom
         
         # Draw trajectory trail using stored positions
@@ -864,32 +1038,92 @@ class RocketSimulationUI(QtWidgets.QWidget):
             ax.plot([x1, x2], [y1, y2], 
                    color=color, alpha=alpha, linewidth=2)
         
-        # Draw current rocket position
+        # Draw current rocket position (rotated polygon) and flame aligned with body
         if y_pos > 0:
-            ax.plot([x_pos], [y_pos], color=color, marker='^', markersize=20, 
-                   markeredgecolor='black', markeredgewidth=2)
-            
+            import matplotlib.patches as mpatches
+            # Rocket dimensions in world units (visual only)
+            L_draw = 0.6
+            W_draw = 0.18
+            # Body frame vertices: (x_right, y_forward)
+            nose = (0.0, L_draw/2)
+            left_tail = (-W_draw/2, -L_draw/2)
+            right_tail = (W_draw/2, -L_draw/2)
+            # Forward along body axis and right perpendicular
+            u_forward = (math.sin(self.launch_angle), math.cos(self.launch_angle))
+            u_right = (math.cos(self.launch_angle), -math.sin(self.launch_angle))
+            def to_world(pt):
+                x_r, y_f = pt
+                return (x_pos + x_r * u_right[0] + y_f * u_forward[0],
+                        y_pos + x_r * u_right[1] + y_f * u_forward[1])
+            verts = [to_world(nose), to_world(right_tail), to_world(left_tail)]
+            rocket_poly = mpatches.Polygon(verts, closed=True, facecolor=color, edgecolor='black', linewidth=2, zorder=6)
+            ax.add_patch(rocket_poly)
+
             # Add thrust flame based on actual thrust with smoothing
             if not hasattr(self, 'smooth_flame_intensity'):
                 self.smooth_flame_intensity = 0.0
-                
             max_thrust = max(thrusts) if thrusts else 1000  # Normalize flame size
             target_flame_intensity = current_thrust / max_thrust if max_thrust > 0 else 0
-            
             # Smooth flame intensity changes
             flame_smoothing = 0.2
             self.smooth_flame_intensity += (target_flame_intensity - self.smooth_flame_intensity) * flame_smoothing
-            
             flame_length = self.smooth_flame_intensity * 0.5  # Scale flame length
             if flame_length > 0.02:  # Only show flame if significant thrust
                 # Add slight flame flicker for realism
                 flicker = 1.0 + 0.1 * math.sin(t * 25) * self.smooth_flame_intensity
                 actual_flame_length = flame_length * flicker
-                
-                ax.plot([x_pos, x_pos], [y_pos - 0.1, y_pos - 0.1 - actual_flame_length], 
-                       color='orange', linewidth=max(1, int(8 * self.smooth_flame_intensity)), alpha=0.8)
-                ax.plot([x_pos, x_pos], [y_pos - 0.1, y_pos - 0.1 - actual_flame_length * 0.7], 
-                       color='yellow', linewidth=max(1, int(4 * self.smooth_flame_intensity)), alpha=0.9)
+                # Tail center in world coords (0, -L/2 in body frame)
+                tail_world = to_world((0.0, -L_draw/2))
+                # Flame direction opposite forward
+                flame_dir = (-u_forward[0], -u_forward[1])
+                end1 = (tail_world[0] + flame_dir[0] * actual_flame_length,
+                        tail_world[1] + flame_dir[1] * actual_flame_length)
+                end2 = (tail_world[0] + flame_dir[0] * actual_flame_length * 0.7,
+                        tail_world[1] + flame_dir[1] * actual_flame_length * 0.7)
+                ax.plot([tail_world[0], end1[0]], [tail_world[1], end1[1]],
+                        color='orange', linewidth=max(1, int(8 * self.smooth_flame_intensity)), alpha=0.8)
+                ax.plot([tail_world[0], end2[0]], [tail_world[1], end2[1]],
+                        color='yellow', linewidth=max(1, int(4 * self.smooth_flame_intensity)), alpha=0.9)
+
+            # Draw parachute if deployed
+            if self.chute_deployed and self.chute_open_factor > 0.05:
+                # Direction opposite velocity
+                v_total = (self.launch_x_vel**2 + self.launch_velocity**2) ** 0.5
+                if v_total < 1e-3:
+                    para_dir = (0.0, 1.0)
+                else:
+                    para_dir = (-self.launch_x_vel / v_total, -self.launch_velocity / v_total)
+                # Canopy center a bit behind rocket along para_dir
+                canopy_offset = 0.9 * L_draw
+                canopy_center = (x_pos + para_dir[0] * canopy_offset,
+                                 y_pos + para_dir[1] * canopy_offset)
+                canopy_radius = 0.35 * self.chute_open_factor
+                canopy = mpatches.Circle(canopy_center, canopy_radius, facecolor='#A7C7E7', edgecolor='#3C2F1E', linewidth=2, alpha=0.85, zorder=5)
+                ax.add_patch(canopy)
+                # Lines (shrouds) to tail
+                tail_anchor = to_world((0.0, -L_draw/2))
+                ax.plot([tail_anchor[0], canopy_center[0]], [tail_anchor[1], canopy_center[1]], color='#3C2F1E', linewidth=1, alpha=0.8, zorder=5)
+
+            # FBD arrows (thrust, drag, gravity) near rocket
+            # Thrust
+            max_thrust = max(thrusts) if thrusts else 1000
+            t_scale = 0.4 * (current_thrust / max_thrust) if max_thrust > 0 else 0
+            ax.arrow(x_pos, y_pos, u_forward[0]*t_scale, u_forward[1]*t_scale, head_width=0.06, head_length=0.08, fc='green', ec='green', alpha=0.8, zorder=7)
+            # Drag opposite velocity
+            if v_total > 1e-3:
+                d_dir = (-self.launch_x_vel / v_total, -self.launch_velocity / v_total)
+                d_scale = 0.4 * min(1.0, v_total / 50.0)
+                ax.arrow(x_pos, y_pos, d_dir[0]*d_scale, d_dir[1]*d_scale, head_width=0.06, head_length=0.08, fc='red', ec='red', alpha=0.8, zorder=7)
+            # Gravity
+            g_len = 0.3
+            ax.arrow(x_pos, y_pos, 0, -g_len, head_width=0.06, head_length=0.08, fc='blue', ec='blue', alpha=0.8, zorder=7)
+
+        # Apogee flash marker
+        if self.apogee_flash_frames and self.apogee_pos:
+            fx, fy = self.apogee_pos
+            flash_alpha = max(0.0, self.apogee_flash_frames / 30.0)
+            ax.scatter([fx], [fy], s=180, c='#FFD447', edgecolors='#E94F37', linewidths=2, alpha=flash_alpha, zorder=8, marker='*')
+            self.apogee_flash_frames = max(0, self.apogee_flash_frames - 1)
         
         # Draw wind arrow
         if wind_speed > 0:
@@ -1019,7 +1253,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             chute_cd = float(self.chute_cd_input.text())
         except Exception:
             chute_cd = 1.5
-        chute_deploy_time = random.uniform(0.5, 5.0)
+        # No random time-based deployment by default; we deploy based on descent and height
+        chute_deploy_time = None
         return m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd
 
     def start_simulation(self):
