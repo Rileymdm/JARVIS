@@ -771,19 +771,31 @@ class RocketSimulationUI(QtWidgets.QWidget):
         dt = 0.025  # Smaller time step for smoother physics (25ms)
         
         # Perform multiple small integration steps for smoother motion
-        for _ in range(2):  # 2 steps of 25ms each = 50ms total
-            # Calculate drag force: F_drag = 0.5 * rho * v^2 * Cd * A
-            drag_force = 0.5 * rho * (self.launch_velocity ** 2) * Cd * A if self.launch_velocity > 0 else 0
+        for step_idx in range(2):  # 2 steps of 25ms each = 50ms total
+            # Sample thrust per substep for smoother burn dynamics
+            t_sub = t + step_idx * dt
+            current_thrust_step = float(thrust_func(t_sub)) if t_sub <= burn_time else 0.0
+
+            # Calculate drag force magnitude: F_drag = 0.5 * rho * v^2 * Cd * A
+            if self.launch_velocity != 0:
+                drag_force_mag = 0.5 * rho * (self.launch_velocity ** 2) * Cd * A
+                # Drag always opposes motion
+                drag_term = math.copysign(drag_force_mag, self.launch_velocity)
+            else:
+                drag_term = 0.0
             
-            # Net force: thrust - drag - weight
-            net_force = current_thrust - drag_force - (self.launch_mass * g)
+            # Net force: thrust - weight - drag(sign)
+            net_force = current_thrust_step - drag_term - (self.launch_mass * g)
             acceleration = net_force / self.launch_mass
             
-            # Add instability if rocket is unstable (but smoother)
+            # Add instability if rocket is unstable (stronger, includes lateral wobble)
             if not stable:
-                # Smoother wobble that increases with time and velocity
-                wobble_magnitude = 0.3 * math.sin(t * 8) * (1 + t * 0.05)
+                # Vertical wobble increases slightly with time
+                wobble_magnitude = 0.6 * math.sin(t_sub * 8.0) * (1 + min(t, 10) * 0.05)
                 acceleration += wobble_magnitude
+                # Lateral wobble to visualize instability
+                lateral_wobble = 0.2 * math.sin(t_sub * 6.0) * (1 + min(t, 10) * 0.05)
+                self.launch_x_pos += lateral_wobble * dt
             
             # Smooth acceleration changes to avoid jerky motion
             acceleration_smoothing = 0.3
@@ -816,7 +828,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Camera smoothing parameters
         camera_smoothing = 0.15  # Lower = smoother, higher = more responsive
-        zoom_smoothing = 0.08    # Slower zoom changes for smoother experience
+        zoom_smoothing = 0.18    # Faster zoom response for a snappier feel
         
         # Smooth camera position
         self.smooth_center_x += (x_pos - self.smooth_center_x) * camera_smoothing
@@ -904,7 +916,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Add status text
         if not stable and y_pos > 0:
-            ax.text(0, 2.7, 'UNSTABLE!', ha='center', va='center', 
+            # Attach instability warning near the rocket so it's always visible
+            ax.text(x_pos, y_pos + 0.5, 'UNSTABLE!', ha='center', va='center', 
                    fontsize=12, color='red', fontweight='bold',
                    bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.8))
         
@@ -918,8 +931,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Update time
         self.launch_time += 0.05
         
-        # End animation after 8 seconds or if rocket hits ground
-        if self.launch_time > 8 or (y_pos <= 0 and t > 1):
+        # End animation when rocket impacts ground, or after a safety max duration
+        if (y_pos <= 0 and t > 1) or self.launch_time > 60:
             self.launch_timer.stop()
             self.is_launching = False
             self.launch_button.setText('Launch Again!')
