@@ -1,5 +1,6 @@
 from PyQt5 import QtWidgets, QtGui, QtCore
 import sys
+import math
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -9,6 +10,9 @@ import json
 import numpy as np
 import random
 import traceback
+import csv
+from scipy.interpolate import interp1d
+import matplotlib.patches as mpatches
 
 # === FULL RETRO PIXEL STYLE ===
 retro_style = """
@@ -261,13 +265,29 @@ class RocketSimulationUI(QtWidgets.QWidget):
         right_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         right_layout = QtWidgets.QVBoxLayout(right_widget)
 
+        # --- Graph/Spreadsheet Tabs ---
+        self.graph_tab_widget = QtWidgets.QTabWidget()
+        # Graph tab
+        graph_tab = QtWidgets.QWidget()
+        graph_layout = QtWidgets.QVBoxLayout(graph_tab)
         self.figure = plt.Figure()
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        right_layout.addWidget(self.canvas)
+        graph_layout.addWidget(self.canvas)
         self.toolbar = NavigationToolbar(self.canvas, self)
         self.toolbar.setStyleSheet("background-color: #F8F5E3; border: 2px solid #BCA16A; color: #3C2F1E; font-family: 'Press Start 2P', monospace; font-size: 12px;")
-        right_layout.addWidget(self.toolbar)
+        graph_layout.addWidget(self.toolbar)
+        self.graph_tab_widget.addTab(graph_tab, "Graph")
+
+        # Spreadsheet tab
+        spreadsheet_tab = QtWidgets.QWidget()
+        spreadsheet_layout = QtWidgets.QVBoxLayout(spreadsheet_tab)
+        self.spreadsheet_table = QtWidgets.QTableWidget()
+        self.spreadsheet_table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        spreadsheet_layout.addWidget(self.spreadsheet_table)
+        self.graph_tab_widget.addTab(spreadsheet_tab, "Spreadsheet Data")
+
+        right_layout.addWidget(self.graph_tab_widget)
 
         # --- Animation Controls ---
         anim_controls_layout = QtWidgets.QHBoxLayout()
@@ -376,6 +396,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.center_of_pressure_input.setSuffix(" m")
         stability_layout.addRow("Center of Pressure:", self.center_of_pressure_input)
 
+        self.launch_angle_input = QtWidgets.QDoubleSpinBox()
+        self.launch_angle_input.setRange(-45.0, 45.0)
+        self.launch_angle_input.setValue(0.0)
+        self.launch_angle_input.setSuffix("°")
+        self.launch_angle_input.setToolTip("Launch guide cocking angle (0° = vertical)")
+        stability_layout.addRow("Launch Guide Angle:", self.launch_angle_input)
+
         self.stability_status_label = QtWidgets.QLabel("Stability Margin: 0.2 m (Stable)")
         self.stability_status_label.setAlignment(QtCore.Qt.AlignCenter)
         self.stability_status_label.setStyleSheet("font-size:14px;color:#2E8B57;font-weight:bold;")
@@ -480,44 +507,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             stable = margin > 0.05
             color = '#2E8B57' if stable else '#E94F37'
             
-            import math
-            from scipy.interpolate import interp1d
-            
-            # Setup thrust curve data
-            thrust_data = []
-            if hasattr(self, 'thrust_curve_path') and self.thrust_curve_path:
-                # Load thrust curve from file
-                import csv
-                try:
-                    with open(self.thrust_curve_path, newline='') as csvfile:
-                        reader = csv.reader(csvfile)
-                        for row in reader:
-                            if not row or len(row) < 2:
-                                continue
-                            try:
-                                t_thrust = float(row[0])
-                                thrust = float(row[1])
-                                thrust_data.append((t_thrust, thrust))
-                            except:
-                                continue
-                except:
-                    thrust_data = []
-            
-            if not thrust_data:
-                # Default thrust curve
-                thrust_data = [
-                    (0.124, 816.849), (0.375, 796.043), (0.626, 781.861), (0.877, 767.440),
-                    (1.129, 759.627), (1.380, 735.948), (1.631, 714.454), (1.883, 701.582),
-                    (2.134, 674.667), (2.385, 656.493), (2.637, 636.076), (2.889, 612.409),
-                    (3.140, 587.801), (3.391, 567.170), (3.642, 559.971), (3.894, 534.157),
-                    (4.145, 444.562), (4.396, 280.510), (4.648, 216.702), (4.899, 163.136),
-                    (5.150, 120.571), (5.402, 86.544), (5.653, 59.990), (5.904, 39.527),
-                    (6.156, 25.914), (6.408, 0.000)
-                ]
-            
-            times_thrust, thrusts = zip(*thrust_data)
-            thrust_func = interp1d(times_thrust, thrusts, bounds_error=False, fill_value=0.0)
-            burn_time = times_thrust[-1]
+            # Load thrust curve data using shared method
+            times_thrust, thrusts, thrust_func, burn_time = self.load_thrust_curve_data()
             
             # Simulate trajectory preview using real physics
             g = 9.81
@@ -616,6 +607,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.center_of_mass_input.valueChanged.connect(update_launch_animation)
         self.center_of_pressure_input.valueChanged.connect(update_launch_animation)
         self.rocket_length_input.valueChanged.connect(update_launch_animation)
+        self.launch_angle_input.valueChanged.connect(update_launch_animation)
         
         # Initial animation update
         update_launch_animation()
@@ -671,6 +663,42 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.chute_height_unit.currentIndexChanged.connect(lambda: self.update_conversions('chute_height'))
         self.chute_size_unit.currentIndexChanged.connect(lambda: self.update_conversions('chute_size'))
 
+    def load_thrust_curve_data(self):
+        """Load thrust curve data from file or use default. Returns (times, thrusts, thrust_func, burn_time)"""
+        thrust_data = []
+        if hasattr(self, 'thrust_curve_path') and self.thrust_curve_path:
+            try:
+                with open(self.thrust_curve_path, newline='') as csvfile:
+                    reader = csv.reader(csvfile)
+                    for row in reader:
+                        if not row or len(row) < 2:
+                            continue
+                        try:
+                            t_thrust = float(row[0])
+                            thrust = float(row[1])
+                            thrust_data.append((t_thrust, thrust))
+                        except:
+                            continue
+            except:
+                thrust_data = []
+        
+        if not thrust_data:
+            # Default thrust curve
+            thrust_data = [
+                (0.124, 816.849), (0.375, 796.043), (0.626, 781.861), (0.877, 767.440),
+                (1.129, 759.627), (1.380, 735.948), (1.631, 714.454), (1.883, 701.582),
+                (2.134, 674.667), (2.385, 656.493), (2.637, 636.076), (2.889, 612.409),
+                (3.140, 587.801), (3.391, 567.170), (3.642, 559.971), (3.894, 534.157),
+                (4.145, 444.562), (4.396, 280.510), (4.648, 216.702), (4.899, 163.136),
+                (5.150, 120.571), (5.402, 86.544), (5.653, 59.990), (5.904, 39.527),
+                (6.156, 25.914), (6.408, 0.000)
+            ]
+        
+        times_thrust, thrusts = zip(*thrust_data)
+        thrust_func = interp1d(times_thrust, thrusts, bounds_error=False, fill_value=0.0)
+        burn_time = times_thrust[-1]
+        return times_thrust, thrusts, thrust_func, burn_time
+
     def toggle_fbd_animation(self):
         if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
             if self.anim_pause_button.isChecked():
@@ -690,8 +718,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.launch_altitude = 0.0
         self.launch_x_pos = 0.0
         self.launch_x_vel = 0.0
-        # Angular state for full rotation
-        self.launch_angle = 0.0              # radians, 0 = pointing up
+        # Angular state for full rotation - start with launch guide angle
+        launch_guide_angle_deg = self.launch_angle_input.value()
+        self.launch_angle = math.radians(launch_guide_angle_deg)  # Convert to radians
         self.launch_angular_velocity = 0.0   # radians/sec
         # Parachute and apogee state
         self.chute_deployed = False
@@ -765,44 +794,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 instability_gain = 1.0
         color = '#2E8B57' if stable else '#E94F37'
         
-        import math
-        from scipy.interpolate import interp1d
-        
-        # Setup thrust curve data (same as simulation.py)
-        thrust_data = []
-        if hasattr(self, 'thrust_curve_path') and self.thrust_curve_path:
-            # Load thrust curve from file
-            import csv
-            try:
-                with open(self.thrust_curve_path, newline='') as csvfile:
-                    reader = csv.reader(csvfile)
-                    for row in reader:
-                        if not row or len(row) < 2:
-                            continue
-                        try:
-                            t_thrust = float(row[0])
-                            thrust = float(row[1])
-                            thrust_data.append((t_thrust, thrust))
-                        except:
-                            continue
-            except:
-                thrust_data = []
-        
-        if not thrust_data:
-            # Default thrust curve
-            thrust_data = [
-                (0.124, 816.849), (0.375, 796.043), (0.626, 781.861), (0.877, 767.440),
-                (1.129, 759.627), (1.380, 735.948), (1.631, 714.454), (1.883, 701.582),
-                (2.134, 674.667), (2.385, 656.493), (2.637, 636.076), (2.889, 612.409),
-                (3.140, 587.801), (3.391, 567.170), (3.642, 559.971), (3.894, 534.157),
-                (4.145, 444.562), (4.396, 280.510), (4.648, 216.702), (4.899, 163.136),
-                (5.150, 120.571), (5.402, 86.544), (5.653, 59.990), (5.904, 39.527),
-                (6.156, 25.914), (6.408, 0.000)
-            ]
-        
-        times_thrust, thrusts = zip(*thrust_data)
-        thrust_func = interp1d(times_thrust, thrusts, bounds_error=False, fill_value=0.0)
-        burn_time = times_thrust[-1]
+        # Load thrust curve data using shared method
+        times_thrust, thrusts, thrust_func, burn_time = self.load_thrust_curve_data()
         
         # Current simulation time
         t = self.launch_time
@@ -829,7 +822,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.launch_mass = m
             self.prev_acceleration = 0.0  # For smoothing
             # Initialize angular state if missing
-            self.launch_angle = 0.0
+            launch_guide_angle_deg = self.launch_angle_input.value()
+            self.launch_angle = math.radians(launch_guide_angle_deg)
             self.launch_angular_velocity = 0.0
             # Parachute/apogee defaults
             self.chute_deployed = False
@@ -1040,7 +1034,6 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Draw current rocket position (rotated polygon) and flame aligned with body
         if y_pos > 0:
-            import matplotlib.patches as mpatches
             # Rocket dimensions in world units (visual only)
             L_draw = 0.6
             W_draw = 0.18
@@ -1328,6 +1321,19 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     def display_results(self, results):
         if results:
+         # --- Populate spreadsheet table ---
+            headers = list(results[0].keys()) if results else []
+            self.spreadsheet_table.setColumnCount(len(headers))
+            self.spreadsheet_table.setRowCount(len(results))
+            self.spreadsheet_table.setHorizontalHeaderLabels([h.capitalize() for h in headers])
+            for row_idx, row in enumerate(results):
+                for col_idx, key in enumerate(headers):
+                    val = row[key]
+                    # Format floats for readability
+                    if isinstance(val, float):
+                        val = f"{val:.4f}"
+                    self.spreadsheet_table.setItem(row_idx, col_idx, QtWidgets.QTableWidgetItem(str(val)))
+            self.spreadsheet_table.resizeColumnsToContents()
             # Find max values and their times
             max_alt = max(r['altitude'] for r in results)
             max_alt_idx = next(i for i, r in enumerate(results) if r['altitude'] == max_alt)
@@ -1464,9 +1470,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.canvas.draw()
 
         # === FBD Animation Overlay ===
-        import matplotlib.patches as mpatches
         from matplotlib.lines import Line2D
-        from PyQt5.QtCore import QTimer
 
         # Remove previous FBD artists if any
         if hasattr(self, '_fbd_artists'):
@@ -1721,7 +1725,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Use QTimer for animation
         if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
             self._fbd_timer.stop()
-        self._fbd_timer = QTimer()
+        self._fbd_timer = QtCore.QTimer()
         self._fbd_timer.timeout.connect(fbd_anim_step)
         self._fbd_frame = 0
         self._fbd_timer.start(self.anim_speed_slider.value())
