@@ -100,26 +100,764 @@ class RocketSimulationUI(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self._rocket_img_cache = {}
+        
+        # Initialize theme system
+        self.current_theme = "retro"  # Default to retro theme
+        self.themes = self.setup_themes()
+        
+        # Set user settings file path
+        self.user_settings_file = os.path.join(os.path.dirname(__file__), 'user_settings.json')
+        
+        # Load saved theme preference
+        self.current_theme = self.load_theme_preference()
+        
         # Set window and taskbar icon (use .ico for best Windows compatibility)
         self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), 'JARVIS.ico')))
         self.init_ui()
         self.load_inputs()  # Load inputs on startup
+        self.apply_theme(self.current_theme)  # Apply initial theme
         self.showMaximized()
+
+    def setup_themes(self):
+        """Define all available themes for the application"""
+        return {
+            "retro": {
+                "name": "JARVIS Retro",
+                "description": "Classic 8BitDo retro gaming aesthetic",
+                "colors": {
+                    "primary_bg": "#F8F5E3",
+                    "secondary_bg": "#FDF6E3", 
+                    "accent": "#BCA16A",
+                    "primary_text": "#3C2F1E",
+                    "button_bg": "#E94F37",
+                    "button_hover": "#FFD447",
+                    "button_text": "#F8F5E3",
+                    "success": "#2E8B57",
+                    "warning": "#FF6347",
+                    "info": "#4169E1"
+                },
+                "telemetry": {
+                    "bg": "#F8F5E3",
+                    "border": "#BCA16A",
+                    "header_bg": "#3C2F1E",
+                    "header_text": "#FFD447",
+                    "gauge_bg": "#FFFFFF",
+                    "gauge_text": "#3C2F1E",
+                    "status_active": "#32CD32",
+                    "status_inactive": "#C0C0C0"
+                },
+                "plot_bg": "#F8F5E3"
+            },
+            "professional": {
+                "name": "Aerospace Professional",
+                "description": "Mission control center dark theme",
+                "colors": {
+                    "primary_bg": "#2C3E50",
+                    "secondary_bg": "#34495E",
+                    "accent": "#00D4FF",
+                    "primary_text": "#ECF0F1",
+                    "button_bg": "#E94F37",
+                    "button_hover": "#FF6B35",
+                    "button_text": "#FFFFFF",
+                    "success": "#00FF41",
+                    "warning": "#FF6B35",
+                    "info": "#0099FF"
+                },
+                "telemetry": {
+                    "bg": "qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #2C3E50, stop: 1 #34495E)",
+                    "border": "#1A252F",
+                    "header_bg": "qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #1A252F, stop: 1 #0F1419)",
+                    "header_text": "#00D4FF",
+                    "gauge_bg": "qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 rgba(26, 37, 47, 0.9), stop: 1 rgba(15, 20, 25, 0.9))",
+                    "gauge_text": "#ECF0F1",
+                    "status_active": "#00FF41",
+                    "status_inactive": "#555555"
+                },
+                "plot_bg": "#1A252F"
+            }
+        }
+
+    def apply_theme(self, theme_name):
+        """Apply the selected theme to the entire application"""
+        if theme_name not in self.themes:
+            return
+            
+        self.current_theme = theme_name
+        theme = self.themes[theme_name]
+        
+        # Apply base application style
+        if theme_name == "retro":
+            self.apply_retro_theme(theme)
+        elif theme_name == "professional":
+            self.apply_professional_theme(theme)
+            
+        # Update telemetry dashboard if it exists
+        if hasattr(self, 'altitude_display'):
+            self.update_telemetry_theme()
+            
+        # Update plot backgrounds
+        if hasattr(self, 'canvas'):
+            self.canvas.figure.patch.set_facecolor(theme["plot_bg"])
+            self.canvas.draw()
+        if hasattr(self, 'launch_canvas'):
+            self.launch_canvas.figure.patch.set_facecolor(theme["plot_bg"])
+            self.launch_canvas.draw()
+        
+        # Update force diagram styling
+        if hasattr(self, 'force_widget'):
+            self.setup_force_widget_styling()
+            self.setup_force_header()
+        if hasattr(self, 'force_canvas'):
+            self.force_canvas.figure.patch.set_facecolor(theme["plot_bg"])
+            self.update_force_diagram()
+            
+        # Save theme preference
+        self.save_theme_preference()
+
+    def apply_retro_theme(self, theme):
+        """Apply the retro JARVIS theme"""
+        retro_style = f"""
+            QWidget {{
+                background-color: {theme['colors']['primary_bg']};
+                font-family: 'Press Start 2P', monospace;
+                font-size: 12px;
+                color: {theme['colors']['primary_text']};
+            }}
+
+            QLineEdit {{
+                background-color: {theme['colors']['secondary_bg']};
+                border: 2px solid {theme['colors']['accent']};
+                border-radius: 4px;
+                padding: 4px;
+                color: {theme['colors']['primary_text']};
+            }}
+
+            QPushButton {{
+                background-color: {theme['colors']['button_bg']};
+                border: 2px solid {theme['colors']['primary_text']};
+                border-radius: 6px;
+                padding: 6px;
+                font-weight: bold;
+                color: {theme['colors']['button_text']};
+            }}
+
+            QPushButton:hover {{
+                background-color: {theme['colors']['button_hover']};
+                border: 2px solid {theme['colors']['button_bg']};
+                color: {theme['colors']['primary_text']};
+            }}
+
+            QLabel {{
+                font-weight: bold;
+                color: {theme['colors']['primary_text']};
+            }}
+
+            QSplitter::handle {{
+                background-color: {theme['colors']['accent']};
+            }}
+            
+            QTabWidget::pane {{
+                border: 2px solid {theme['colors']['accent']};
+                border-radius: 4px;
+            }}
+            
+            QTabBar::tab {{
+                background-color: {theme['colors']['secondary_bg']};
+                border: 2px solid {theme['colors']['accent']};
+                padding: 8px 16px;
+                margin: 2px;
+            }}
+            
+            QTabBar::tab:selected {{
+                background-color: {theme['colors']['button_bg']};
+                color: {theme['colors']['button_text']};
+            }}
+            
+            QGroupBox {{
+                font-weight: bold;
+                border: 2px solid {theme['colors']['accent']};
+                border-radius: 6px;
+                margin-top: 6px;
+                padding-top: 6px;
+            }}
+            
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px 0 4px;
+                background-color: {theme['colors']['primary_bg']};
+            }}
+            
+            QComboBox {{
+                background-color: {theme['colors']['secondary_bg']};
+                border: 2px solid {theme['colors']['accent']};
+                border-radius: 4px;
+                padding: 4px;
+            }}
+        """
+        self.setStyleSheet(retro_style)
+
+    def apply_professional_theme(self, theme):
+        """Apply the professional aerospace theme"""
+        professional_style = f"""
+            QWidget {{
+                background: {theme['telemetry']['bg']};
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 12px;
+                color: {theme['colors']['primary_text']};
+            }}
+
+            QLineEdit {{
+                background-color: {theme['colors']['secondary_bg']};
+                border: 1px solid {theme['colors']['accent']};
+                border-radius: 4px;
+                padding: 6px;
+                color: {theme['colors']['primary_text']};
+            }}
+
+            QPushButton {{
+                background-color: {theme['colors']['button_bg']};
+                border: 1px solid {theme['colors']['accent']};
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+                color: {theme['colors']['button_text']};
+            }}
+
+            QPushButton:hover {{
+                background-color: {theme['colors']['button_hover']};
+                border: 1px solid {theme['colors']['button_bg']};
+            }}
+
+            QLabel {{
+                color: {theme['colors']['primary_text']};
+                font-weight: normal;
+            }}
+
+            QSplitter::handle {{
+                background-color: {theme['colors']['accent']};
+            }}
+            
+            QTabWidget::pane {{
+                border: 1px solid {theme['colors']['accent']};
+                border-radius: 4px;
+                background: {theme['colors']['primary_bg']};
+            }}
+            
+            QTabBar::tab {{
+                background: {theme['colors']['secondary_bg']};
+                border: 1px solid {theme['colors']['accent']};
+                padding: 8px 16px;
+                margin: 1px;
+                color: {theme['colors']['primary_text']};
+            }}
+            
+            QTabBar::tab:selected {{
+                background-color: {theme['colors']['accent']};
+                color: {theme['colors']['primary_bg']};
+            }}
+            
+            QGroupBox {{
+                font-weight: bold;
+                color: {theme['colors']['accent']};
+                border: 1px solid {theme['colors']['accent']};
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 8px;
+                background: rgba(26, 37, 47, 0.8);
+            }}
+            
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px 0 6px;
+                background-color: rgba(26, 37, 47, 1);
+                border: 1px solid {theme['colors']['accent']};
+                border-radius: 2px;
+            }}
+            
+            QComboBox {{
+                background-color: {theme['colors']['secondary_bg']};
+                border: 1px solid {theme['colors']['accent']};
+                border-radius: 4px;
+                padding: 6px;
+                color: {theme['colors']['primary_text']};
+            }}
+            
+            QComboBox::drop-down {{
+                border: none;
+            }}
+            
+            QComboBox::down-arrow {{
+                border: none;
+                color: {theme['colors']['accent']};
+            }}
+        """
+        self.setStyleSheet(professional_style)
+
+    def on_theme_changed(self):
+        """Handle theme selection change"""
+        selected_theme = self.theme_select.currentData()
+        if selected_theme and selected_theme != self.current_theme:
+            self.apply_theme(selected_theme)
+            self.update_theme_preview()
+
+    def update_theme_preview(self):
+        """Update the theme preview display"""
+        if not hasattr(self, 'theme_preview'):
+            return
+            
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            preview_style = f"""
+                QLabel {{
+                    background-color: {theme['colors']['primary_bg']};
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 4px;
+                    color: {theme['colors']['primary_text']};
+                    font-weight: bold;
+                    padding: 8px;
+                    qproperty-alignment: AlignCenter;
+                }}
+            """
+            self.theme_preview.setText("🚀 RETRO JARVIS THEME")
+        else:
+            preview_style = f"""
+                QLabel {{
+                    background: {theme['telemetry']['bg']};
+                    border: 1px solid {theme['telemetry']['border']};
+                    border-radius: 4px;
+                    color: {theme['colors']['accent']};
+                    font-weight: bold;
+                    padding: 8px;
+                    qproperty-alignment: AlignCenter;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                }}
+            """
+            self.theme_preview.setText("🛰️ AEROSPACE PROFESSIONAL")
+            
+        self.theme_preview.setStyleSheet(preview_style)
+
+    def save_theme_preference(self):
+        """Save the current theme preference to user settings"""
+        if hasattr(self, 'user_settings_file'):
+            try:
+                with open(self.user_settings_file, 'r') as f:
+                    settings = json.load(f)
+            except:
+                settings = {}
+            
+            settings['theme'] = self.current_theme
+            
+            try:
+                with open(self.user_settings_file, 'w') as f:
+                    json.dump(settings, f, indent=2)
+            except:
+                pass
+
+    def load_theme_preference(self):
+        """Load the saved theme preference"""
+        if hasattr(self, 'user_settings_file'):
+            try:
+                with open(self.user_settings_file, 'r') as f:
+                    settings = json.load(f)
+                    return settings.get('theme', 'retro')
+            except:
+                pass
+        return 'retro'
+
+    def update_telemetry_theme(self):
+        """Update telemetry dashboard styling based on current theme"""
+        if not hasattr(self, 'altitude_display'):
+            return
+            
+        theme = self.themes[self.current_theme]
+        
+        # This method will be called to refresh telemetry components with new theme
+        # The telemetry components will be recreated with the new theme automatically
+        # when the main style is applied
+        pass
+
+    def setup_telemetry_widget_styling(self):
+        """Apply theme-aware styling to telemetry widget"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            style = f"""
+                QWidget {{
+                    background-color: {theme['colors']['primary_bg']};
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 8px;
+                    margin: 2px;
+                }}
+            """
+        else:
+            style = f"""
+                QWidget {{
+                    background: {theme['telemetry']['bg']};
+                    border: 1px solid {theme['telemetry']['border']};
+                    border-radius: 8px;
+                    margin: 2px;
+                }}
+            """
+        self.telemetry_widget.setStyleSheet(style)
+
+    def setup_telemetry_header(self):
+        """Apply theme-aware styling to telemetry header"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            self.telemetry_header.setText("")  # Remove header text
+            style = "QLabel { background: transparent; margin: 0px; padding: 0px; }"
+        else:
+            self.telemetry_header.setText("")  # Remove header text
+            style = "QLabel { background: transparent; margin: 0px; padding: 0px; }"
+        self.telemetry_header.setStyleSheet(style)
+        self.telemetry_header.setMaximumHeight(0)  # Hide completely
+
+    def setup_force_widget_styling(self):
+        """Setup theme-aware styling for force widget"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            style = f"""
+                QWidget {{
+                    background-color: {theme['colors']['primary_bg']};
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 8px;
+                    margin: 2px;
+                }}
+            """
+        else:
+            style = f"""
+                QWidget {{
+                    background: {theme['telemetry']['bg']};
+                    border: 1px solid {theme['telemetry']['border']};
+                    border-radius: 4px;
+                    margin: 2px;
+                }}
+            """
+        self.force_widget.setStyleSheet(style)
+
+    def setup_force_header(self):
+        """Setup theme-aware force diagram header"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            self.force_header.setText("")  # Remove header text
+            style = "QLabel { background: transparent; margin: 0px; padding: 0px; }"
+        else:
+            self.force_header.setText("")  # Remove header text
+            style = "QLabel { background: transparent; margin: 0px; padding: 0px; }"
+        self.force_header.setStyleSheet(style)
+        self.force_header.setMaximumHeight(0)  # Hide completely
+
+    def setup_trajectory_widget_styling(self):
+        """Apply theme-aware styling to trajectory widget"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            style = f"""
+                QWidget {{
+                    background-color: {theme['colors']['primary_bg']};
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 8px;
+                    margin: 2px;
+                }}
+            """
+        else:
+            style = f"""
+                QWidget {{
+                    background: {theme['telemetry']['bg']};
+                    border: 1px solid {theme['telemetry']['border']};
+                    border-radius: 8px;
+                    margin: 2px;
+                }}
+            """
+        self.trajectory_widget.setStyleSheet(style)
+
+    def setup_trajectory_header(self):
+        """Apply theme-aware styling to trajectory header"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            self.trajectory_header.setText("📈 TRAJECTORY VISUALIZATION")
+            self.trajectory_header.setAlignment(QtCore.Qt.AlignCenter)
+            style = f"""
+                QLabel {{
+                    background-color: {theme['colors']['primary_text']};
+                    color: {theme['colors']['button_hover']};
+                    font-size: 16px;
+                    font-weight: bold;
+                    padding: 8px;
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 6px;
+                    margin-bottom: 8px;
+                }}
+            """
+        else:
+            self.trajectory_header.setText("FLIGHT PATH VISUALIZATION")
+            self.trajectory_header.setAlignment(QtCore.Qt.AlignCenter)
+            style = f"""
+                QLabel {{
+                    background: {theme['telemetry']['header_bg']};
+                    color: {theme['telemetry']['header_text']};
+                    font-size: 14px;
+                    font-weight: bold;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    padding: 12px;
+                    border: 1px solid {theme['colors']['secondary_bg']};
+                    border-radius: 4px;
+                    margin-bottom: 8px;
+                    letter-spacing: 2px;
+                }}
+            """
+        self.trajectory_header.setStyleSheet(style)
+
+    def setup_plot_background(self):
+        """Set plot background based on current theme"""
+        theme = self.themes[self.current_theme]
+        self.launch_fig.patch.set_facecolor(theme["plot_bg"])
+
+    def setup_canvas_styling(self):
+        """Apply theme-aware styling to canvas"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            style = f"""
+                QWidget {{
+                    border: 1px solid {theme['colors']['accent']};
+                    border-radius: 4px;
+                }}
+            """
+        else:
+            style = f"""
+                QWidget {{
+                    border: 1px solid {theme['colors']['secondary_bg']};
+                    border-radius: 4px;
+                    background-color: {theme['plot_bg']};
+                }}
+            """
+        self.launch_canvas.setStyleSheet(style)
+
+    def setup_group_styling(self, group):
+        """Apply theme-aware styling to group boxes"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            group.setStyleSheet(f"""
+                QGroupBox {{
+                    font-size: 12px;
+                    font-weight: bold;
+                    color: {theme['colors']['primary_text']};
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 6px;
+                    margin-top: 6px;
+                    padding-top: 6px;
+                }}
+                QGroupBox::title {{
+                    subcontrol-origin: margin;
+                    left: 8px;
+                    padding: 0 4px 0 4px;
+                    background-color: {theme['colors']['primary_bg']};
+                }}
+            """)
+        else:
+            group.setStyleSheet(f"""
+                QGroupBox {{
+                    font-size: 11px;
+                    font-weight: bold;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    color: {theme['colors']['accent']};
+                    border: 1px solid {theme['colors']['secondary_bg']};
+                    border-radius: 4px;
+                    margin-top: 8px;
+                    padding-top: 8px;
+                    background: rgba(26, 37, 47, 0.8);
+                }}
+                QGroupBox::title {{
+                    subcontrol-origin: margin;
+                    left: 12px;
+                    padding: 0 6px 0 6px;
+                    background-color: rgba(26, 37, 47, 1);
+                    border: 1px solid {theme['colors']['secondary_bg']};
+                    border-radius: 2px;
+                }}
+            """)
+
+    def setup_status_display_styling(self):
+        """Apply theme-aware styling to status displays"""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            phase_style = f"""
+                QLabel {{
+                    background-color: {theme['colors']['primary_text']};
+                    color: {theme['colors']['button_hover']};
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding: 8px 12px;
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 6px;
+                }}
+            """
+            time_style = f"""
+                QLabel {{
+                    background-color: {theme['colors']['success']};
+                    color: {theme['colors']['primary_bg']};
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding: 8px 12px;
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 6px;
+                }}
+            """
+        else:
+            phase_style = f"""
+                QLabel {{
+                    background: {theme['telemetry']['header_bg']};
+                    color: {theme['colors']['success']};
+                    font-size: 13px;
+                    font-weight: bold;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    padding: 10px 16px;
+                    border: 1px solid {theme['colors']['secondary_bg']};
+                    border-radius: 3px;
+                    letter-spacing: 1px;
+                }}
+            """
+            time_style = f"""
+                QLabel {{
+                    background: {theme['telemetry']['header_bg']};
+                    color: {theme['colors']['accent']};
+                    font-size: 13px;
+                    font-weight: bold;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    padding: 10px 16px;
+                    border: 1px solid {theme['colors']['secondary_bg']};
+                    border-radius: 3px;
+                    letter-spacing: 1px;
+                }}
+            """
+        
+        self.phase_display.setStyleSheet(phase_style)
+        self.time_display.setStyleSheet(time_style)
+
+    def create_retro_gauge(self, label, value, unit, color):
+        """Create a retro-themed gauge display"""
+        widget = QtWidgets.QFrame()
+        widget.setFrameStyle(QtWidgets.QFrame.StyledPanel)
+        theme = self.themes["retro"]
+        widget.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['colors']['secondary_bg']};
+                border: 2px solid {color};
+                border-radius: 8px;
+                margin: 2px;
+            }}
+            QLabel {{
+                background-color: transparent;
+                color: {theme['colors']['primary_text']};
+            }}
+        """)
+        
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+        
+        # Label
+        label_widget = QtWidgets.QLabel(label)
+        label_widget.setAlignment(QtCore.Qt.AlignCenter)
+        label_widget.setStyleSheet(f"""
+            font-size: 10px; 
+            color: {color}; 
+            font-weight: bold;
+            text-transform: uppercase;
+        """)
+        
+        # Value
+        value_text = f"{value} {unit}" if unit else value
+        value_widget = QtWidgets.QLabel(value_text)
+        value_widget.setAlignment(QtCore.Qt.AlignCenter)
+        value_widget.setStyleSheet(f"""
+            font-size: 16px; 
+            font-weight: bold; 
+            color: {theme['colors']['primary_text']};
+            padding: 4px;
+        """)
+        
+        layout.addWidget(label_widget)
+        layout.addWidget(value_widget)
+        
+        # Store references
+        widget.value_label = value_widget
+        widget.unit = unit
+        widget.gauge_color = color
+        
+        return widget
+
+    def create_retro_indicator(self, label, icon):
+        """Create a retro-themed status indicator"""
+        widget = QtWidgets.QFrame()
+        theme = self.themes["retro"]
+        widget.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme['colors']['secondary_bg']};
+                border: 1px solid {theme['colors']['accent']};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+        """)
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(2)
+        
+        # Icon and status
+        status_layout = QtWidgets.QHBoxLayout()
+        
+        icon_label = QtWidgets.QLabel(icon)
+        icon_label.setAlignment(QtCore.Qt.AlignCenter)
+        icon_label.setStyleSheet("font-size: 14px;")
+        
+        circle = QtWidgets.QLabel("●")
+        circle.setAlignment(QtCore.Qt.AlignCenter)
+        circle.setStyleSheet(f"color: {theme['telemetry']['status_inactive']}; font-size: 12px;")
+        
+        status_layout.addWidget(icon_label)
+        status_layout.addWidget(circle)
+        
+        # Label
+        text = QtWidgets.QLabel(label)
+        text.setAlignment(QtCore.Qt.AlignCenter)
+        text.setStyleSheet(f"""
+            font-size: 9px; 
+            color: {theme['colors']['primary_text']}; 
+            font-weight: bold;
+        """)
+        
+        layout.addLayout(status_layout)
+        layout.addWidget(text)
+        
+        # Store references
+        widget.status_circle = circle
+        widget.is_active = False
+        
+        return widget
 
 
     def init_ui(self):
         self.setWindowTitle('JARVIS')
         main_layout = QtWidgets.QHBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)  # No margins on main window
+        main_layout.setSpacing(0)  # No spacing
         self.tabs = QtWidgets.QTabWidget()
         main_panel = QtWidgets.QWidget()
         main_panel_layout = QtWidgets.QHBoxLayout(main_panel)
+        main_panel_layout.setContentsMargins(0, 0, 0, 0)  # No margins on main panel
 
         # Left panel: Inputs
         left_widget = QtWidgets.QWidget()
-        left_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        left_widget.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
+        left_widget.setMaximumWidth(320)  # Limit left panel width
         left_layout = QtWidgets.QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(4, 4, 4, 4)  # Minimal margins
+        left_layout.setSpacing(4)  # Tight spacing
 
         form_layout = QtWidgets.QFormLayout()
+        form_layout.setVerticalSpacing(2)  # Tight vertical spacing
+        form_layout.setHorizontalSpacing(4)  # Minimal horizontal spacing
+        form_layout.setContentsMargins(0, 0, 0, 0)  # No margins
         # Input fields
         self.mass_input = QtWidgets.QLineEdit()
         self.mass_unit = QtWidgets.QComboBox(); self.mass_unit.addItems(["kg", "g", "lb"])
@@ -162,12 +900,29 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.chute_size_unit = QtWidgets.QComboBox(); self.chute_size_unit.addItems(["m²", "ft²"])
         chute_size_row = QtWidgets.QHBoxLayout(); chute_size_row.addWidget(self.chute_size_input); chute_size_row.addWidget(self.chute_size_unit)
 
-        # Set size policies
+        # Set size policies and styling for better spacing
+        input_style = """
+            QLineEdit {
+                padding: 6px 8px;
+                font-size: 11px;
+                border: 1px solid #BCA16A;
+                border-radius: 4px;
+                background-color: #FDF6E3;
+                color: #3C2F1E;
+                min-height: 20px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #E94F37;
+                background-color: #FFFFFF;
+            }
+        """
+        
         for widget in [self.mass_input, self.cd_input, self.area_input, self.rho_input,
                    self.timestep_input,
                    self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
                    self.chute_height_input, self.chute_size_input]:
             widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            widget.setStyleSheet(input_style)
 
         # Add rows to form layout
         form_layout.addRow("Mass:", mass_row)
@@ -185,6 +940,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.chute_cd_input = QtWidgets.QLineEdit()
         self.chute_cd_input.setPlaceholderText("Parachute Cd")
         self.chute_cd_input.setText("1.5")
+        self.chute_cd_input.setStyleSheet(input_style)  # Apply same styling
         form_layout.addRow("Parachute Drag Coefficient (Cd):", self.chute_cd_input)
 
         left_layout.addLayout(form_layout)
@@ -264,12 +1020,16 @@ class RocketSimulationUI(QtWidgets.QWidget):
         right_widget = QtWidgets.QWidget()
         right_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         right_layout = QtWidgets.QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins
+        right_layout.setSpacing(2)  # Tight spacing
 
         # --- Graph/Spreadsheet Tabs ---
         self.graph_tab_widget = QtWidgets.QTabWidget()
         # Graph tab
         graph_tab = QtWidgets.QWidget()
         graph_layout = QtWidgets.QVBoxLayout(graph_tab)
+        graph_layout.setContentsMargins(0, 0, 0, 0)  # No margins for max space
+        graph_layout.setSpacing(0)  # No spacing
         self.figure = plt.Figure()
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -314,20 +1074,58 @@ class RocketSimulationUI(QtWidgets.QWidget):
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         splitter.addWidget(left_widget)
         splitter.addWidget(right_widget)
-        splitter.setSizes([500, 1000])
+        splitter.setSizes([300, 1200])  # Give much more space to visualization
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(1, 4)  # 4:1 ratio for visualization
 
         main_panel_layout.addWidget(splitter)
+        main_panel_layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins
         self.tabs.addTab(main_panel, "Simulation")
 
-        # Settings tab for units
+        # Settings tab for units and theme
         settings_widget = QtWidgets.QWidget()
         settings_layout = QtWidgets.QVBoxLayout(settings_widget)
+        
+        # Theme selection section
+        theme_group = QtWidgets.QGroupBox("Interface Theme")
+        theme_layout = QtWidgets.QVBoxLayout(theme_group)
+        
+        self.theme_select = QtWidgets.QComboBox()
+        for theme_key, theme_data in self.themes.items():
+            self.theme_select.addItem(f"{theme_data['name']} - {theme_data['description']}", theme_key)
+        
+        # Set current theme as selected
+        for i in range(self.theme_select.count()):
+            if self.theme_select.itemData(i) == self.current_theme:
+                self.theme_select.setCurrentIndex(i)
+                break
+        
+        # Connect to theme change handler using lambda to pass the theme name
+        self.theme_select.currentIndexChanged.connect(lambda index: self.on_theme_changed(self.theme_select.itemData(index)))
+        
+        theme_layout.addWidget(QtWidgets.QLabel("Select Interface Theme:"))
+        theme_layout.addWidget(self.theme_select)
+        
+        # Theme preview
+        self.theme_preview = QtWidgets.QLabel()
+        self.theme_preview.setFixedHeight(60)
+        self.theme_preview.setStyleSheet("border: 1px solid #ccc; border-radius: 4px;")
+        self.update_theme_preview()
+        theme_layout.addWidget(QtWidgets.QLabel("Preview:"))
+        theme_layout.addWidget(self.theme_preview)
+        
+        settings_layout.addWidget(theme_group)
+        
+        # Units selection section
+        units_group = QtWidgets.QGroupBox("Measurement Units")
+        units_layout = QtWidgets.QVBoxLayout(units_group)
+        
         self.unit_select = QtWidgets.QComboBox()
         self.unit_select.addItems(["Metric (m, kg)", "Imperial (ft, lb)"])
-        settings_layout.addWidget(QtWidgets.QLabel("Units:"))
-        settings_layout.addWidget(self.unit_select)
+        units_layout.addWidget(QtWidgets.QLabel("Select Unit System:"))
+        units_layout.addWidget(self.unit_select)
+        
+        settings_layout.addWidget(units_group)
         settings_layout.addStretch()
         self.tabs.addTab(settings_widget, "Settings")
 
@@ -422,12 +1220,76 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
         launch_anim_layout.addWidget(stability_group)
 
-        # Rocket launch animation canvas
-        self.launch_fig = plt.Figure(figsize=(8, 6))
-        self.launch_fig.patch.set_facecolor('#F8F5E3')  # Match retro theme
+        # Create horizontal layout for trajectory and telemetry
+        trajectory_telemetry_layout = QtWidgets.QHBoxLayout()
+        
+        # Rocket launch animation canvas (left side)
+        trajectory_widget = QtWidgets.QWidget()
+        self.trajectory_widget = trajectory_widget  # Store reference for theme updates
+        self.setup_trajectory_widget_styling()
+        
+        trajectory_layout = QtWidgets.QVBoxLayout(trajectory_widget)
+        trajectory_layout.setContentsMargins(16, 16, 16, 16)
+        trajectory_layout.setSpacing(12)
+        
+        # Professional header for trajectory
+        traj_header = QtWidgets.QLabel()
+        self.trajectory_header = traj_header  # Store reference for theme updates
+        self.setup_trajectory_header()
+        trajectory_layout.addWidget(traj_header)
+        
+        self.launch_fig = plt.Figure(figsize=(6, 5))
+        self.setup_plot_background()
         self.launch_canvas = FigureCanvas(self.launch_fig)
-        self.launch_canvas.setMinimumSize(400, 300)
-        launch_anim_layout.addWidget(self.launch_canvas)
+        self.launch_canvas.setMinimumSize(300, 250)
+        self.setup_canvas_styling()
+        trajectory_layout.addWidget(self.launch_canvas)
+        trajectory_telemetry_layout.addWidget(trajectory_widget)
+
+        # Real-time Telemetry Dashboard (right side)
+        telemetry_widget = QtWidgets.QWidget()
+        self.telemetry_widget = telemetry_widget  # Store reference for theme updates
+        self.setup_telemetry_widget_styling()
+        
+        telemetry_layout = QtWidgets.QVBoxLayout(telemetry_widget)
+        telemetry_layout.setContentsMargins(8, 8, 8, 8)
+        telemetry_layout.setSpacing(6)
+        
+        # Professional header with theme-aware styling
+        header_label = QtWidgets.QLabel()
+        self.telemetry_header = header_label  # Store reference for theme updates
+        self.setup_telemetry_header()
+        telemetry_layout.addWidget(header_label)
+        
+        # Create telemetry display panels
+        self.create_telemetry_dashboard(telemetry_layout)
+        trajectory_telemetry_layout.addWidget(telemetry_widget)
+        
+        # Force Diagram Widget (third panel)
+        force_widget = QtWidgets.QWidget()
+        self.force_widget = force_widget  # Store reference for theme updates
+        self.setup_force_widget_styling()
+        
+        force_layout = QtWidgets.QVBoxLayout(force_widget)
+        force_layout.setContentsMargins(8, 8, 8, 8)
+        force_layout.setSpacing(6)
+        
+        # Force diagram header
+        force_header = QtWidgets.QLabel()
+        self.force_header = force_header
+        self.setup_force_header()
+        force_layout.addWidget(force_header)
+        
+        # Create force diagram display
+        self.create_force_diagram(force_layout)
+        trajectory_telemetry_layout.addWidget(force_widget)
+        
+        # Set size ratios (trajectory:telemetry:forces = 2:1:1)
+        trajectory_telemetry_layout.setStretchFactor(trajectory_widget, 2)
+        trajectory_telemetry_layout.setStretchFactor(telemetry_widget, 1)
+        trajectory_telemetry_layout.setStretchFactor(force_widget, 1)
+        
+        launch_anim_layout.addLayout(trajectory_telemetry_layout)
 
         # Retro styled Launch/Stop buttons
         buttons_row = QtWidgets.QHBoxLayout()
@@ -698,6 +1560,1241 @@ class RocketSimulationUI(QtWidgets.QWidget):
         thrust_func = interp1d(times_thrust, thrusts, bounds_error=False, fill_value=0.0)
         burn_time = times_thrust[-1]
         return times_thrust, thrusts, thrust_func, burn_time
+
+    def create_telemetry_dashboard(self, layout):
+        """Create a professional mission control-style telemetry dashboard"""
+        
+        # Initialize telemetry data storage
+        self.telemetry_data = {
+            'altitude': 0.0,
+            'velocity': 0.0,
+            'acceleration': 0.0,
+            'thrust': 0.0,
+            'mass': 0.0,
+            'g_force': 0.0,
+            'drag_force': 0.0,
+            'mach_number': 0.0,
+            'flight_phase': 'Standby',
+            'time': 0.0
+        }
+        
+        theme = self.themes[self.current_theme]
+        
+        # Create main scoreboard container with dark professional styling
+        scoreboard = QtWidgets.QFrame()
+        scoreboard.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #1A252F, stop: 1 #0F1419);
+                border: 2px solid #00D4FF;
+                border-radius: 8px;
+                margin: 4px;
+            }}
+        """)
+        
+        scoreboard_layout = QtWidgets.QVBoxLayout(scoreboard)
+        scoreboard_layout.setContentsMargins(12, 8, 12, 8)
+        scoreboard_layout.setSpacing(6)
+        
+        # Mission status header
+        status_header = QtWidgets.QLabel("MISSION TELEMETRY")
+        status_header.setAlignment(QtCore.Qt.AlignCenter)
+        status_header.setStyleSheet("""
+            QLabel {
+                color: #00D4FF;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 12px;
+                font-weight: bold;
+                letter-spacing: 2px;
+                padding: 4px 0px;
+                border-bottom: 1px solid #00D4FF;
+                margin-bottom: 8px;
+            }
+        """)
+        scoreboard_layout.addWidget(status_header)
+        
+        # Primary metrics in a clean grid
+        metrics_grid = QtWidgets.QGridLayout()
+        metrics_grid.setSpacing(8)
+        
+        # Create professional metric displays
+        self.altitude_display = self.create_professional_metric("ALT", "0.0", "m", "#00FF41")
+        self.velocity_display = self.create_professional_metric("VEL", "0.0", "m/s", "#0099FF") 
+        self.acceleration_display = self.create_professional_metric("ACCEL", "0.0", "m/s²", "#FF6B35")
+        self.g_force_display = self.create_professional_metric("G-FORCE", "0.0", "G", "#FF3333")
+        
+        metrics_grid.addWidget(self.altitude_display, 0, 0)
+        metrics_grid.addWidget(self.velocity_display, 0, 1)
+        metrics_grid.addWidget(self.acceleration_display, 1, 0)
+        metrics_grid.addWidget(self.g_force_display, 1, 1)
+        
+        scoreboard_layout.addLayout(metrics_grid)
+        
+        # Secondary metrics row
+        secondary_grid = QtWidgets.QGridLayout()
+        secondary_grid.setSpacing(8)
+        
+        if self.current_theme == "retro":
+            self.thrust_display = self.create_retro_gauge("THRUST", "0.0", "N", theme['colors']['success'])
+            self.mass_display = self.create_retro_gauge("MASS", "0.0", "kg", theme['colors']['primary_text']) 
+            self.drag_display = self.create_retro_gauge("DRAG", "0.0", "N", theme['colors']['warning'])
+            self.mach_display = self.create_retro_gauge("MACH", "0.0", "", "#FF4500")
+        else:
+            self.thrust_display = self.create_professional_metric("THRUST", "0.0", "N", "#32CD32")
+            self.mass_display = self.create_professional_metric("MASS", "0.0", "kg", "#FFFFFF")
+            self.drag_display = self.create_professional_metric("DRAG", "0.0", "N", "#FFA500") 
+            self.mach_display = self.create_professional_metric("MACH", "0.0", "", "#FF69B4")
+        
+        secondary_grid.addWidget(self.thrust_display, 0, 0)
+        secondary_grid.addWidget(self.mass_display, 0, 1)
+        secondary_grid.addWidget(self.drag_display, 1, 0)
+        secondary_grid.addWidget(self.mach_display, 1, 1)
+        
+        scoreboard_layout.addLayout(secondary_grid)
+        
+        # Mission status indicators at bottom
+        status_row = QtWidgets.QHBoxLayout()
+        
+        # Flight phase display
+        self.phase_display = QtWidgets.QLabel("STANDBY")
+        self.phase_display.setAlignment(QtCore.Qt.AlignCenter)
+        self.phase_display.setStyleSheet("""
+            QLabel {
+                background: rgba(0, 212, 255, 0.1);
+                color: #00D4FF;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border: 1px solid #00D4FF;
+                border-radius: 4px;
+                letter-spacing: 1px;
+            }
+        """)
+        
+        # Mission time display
+        self.time_display = QtWidgets.QLabel("T+ 000.0")
+        self.time_display.setAlignment(QtCore.Qt.AlignCenter)
+        self.time_display.setStyleSheet("""
+            QLabel {
+                background: rgba(0, 255, 65, 0.1);
+                color: #00FF41;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border: 1px solid #00FF41;
+                border-radius: 4px;
+                letter-spacing: 1px;
+            }
+        """)
+        
+        status_row.addWidget(self.phase_display)
+        status_row.addWidget(self.time_display)
+        scoreboard_layout.addLayout(status_row)
+        
+        # Add the complete scoreboard to main layout
+        layout.addWidget(scoreboard)
+        
+        # Status indicators for various systems
+        indicators_layout = QtWidgets.QHBoxLayout()
+        
+        if self.current_theme == "retro":
+            self.stable_status = self.create_retro_indicator("STABLE", "⚖️")
+        else:
+            self.stable_status = self.create_professional_indicator("STABLE")
+        
+        indicators_layout.addWidget(self.stable_status)
+        layout.addLayout(indicators_layout)
+        
+        # Initialize telemetry update timer
+        self.telemetry_timer = QtCore.QTimer()
+        self.telemetry_timer.timeout.connect(self.update_telemetry_displays)
+        self.telemetry_timer.timeout.connect(self.update_force_diagram)
+        self.telemetry_timer.start(100)  # Update every 100ms for smooth display
+
+    def create_professional_metric(self, label, value, unit, color):
+        """Create a professional mission control-style metric display"""
+        widget = QtWidgets.QFrame()
+        widget.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 rgba(52, 73, 94, 0.8), 
+                    stop: 1 rgba(44, 62, 80, 0.9));
+                border: 1px solid {color};
+                border-radius: 6px;
+                margin: 2px;
+            }}
+        """)
+        
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+        
+        # Label
+        label_widget = QtWidgets.QLabel(label)
+        label_widget.setAlignment(QtCore.Qt.AlignCenter)
+        label_widget.setStyleSheet(f"""
+            QLabel {{
+                color: {color};
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 8px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                margin-bottom: 2px;
+            }}
+        """)
+        layout.addWidget(label_widget)
+        
+        # Value with unit
+        value_widget = QtWidgets.QLabel(f"{value} {unit}")
+        value_widget.setAlignment(QtCore.Qt.AlignCenter)
+        value_widget.setStyleSheet("""
+            QLabel {
+                color: #FFFFFF;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 12px;
+                font-weight: bold;
+                background: rgba(0, 0, 0, 0.3);
+                padding: 4px;
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(value_widget)
+        
+        # Store reference for updates
+        widget.value_label = value_widget
+        return widget
+
+    def create_force_diagram(self, layout):
+        """Create the real-time force vector diagram display"""
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+        from matplotlib.figure import Figure
+        import matplotlib.patches as patches
+        
+        # Create matplotlib figure for force diagram
+        self.force_fig = Figure(figsize=(4, 6), dpi=80)
+        self.force_fig.patch.set_facecolor('#2C3E50' if self.current_theme == "professional" else '#F8F5E3')
+        self.force_canvas = FigureCanvas(self.force_fig)
+        self.force_canvas.setMinimumSize(200, 300)
+        
+        # Force diagram visualization
+        self.force_ax = self.force_fig.add_subplot(111)
+        self.force_ax.set_xlim(-2, 2)
+        self.force_ax.set_ylim(-1, 4)
+        self.force_ax.set_aspect('equal')
+        self.force_ax.axis('off')
+        
+        # Initialize force vectors
+        self.thrust_vector = None
+        self.drag_vector = None  
+        self.weight_vector = None
+        self.net_vector = None
+        
+        layout.addWidget(self.force_canvas)
+        
+        # Force magnitude displays
+        forces_grid = QtWidgets.QGridLayout()
+        forces_grid.setSpacing(8)
+        
+        # Create force value displays with theme-aware styling
+        self.thrust_force_display = self.create_force_display("THRUST", "0.0", "N", "#00FF00")
+        self.drag_force_display = self.create_force_display("DRAG", "0.0", "N", "#FF4444") 
+        self.chute_drag_display = self.create_force_display("CHUTE", "0.0", "N", "#FF00FF")
+        self.weight_force_display = self.create_force_display("WEIGHT", "0.0", "N", "#FFAA00")
+        self.net_force_display = self.create_force_display("NET", "0.0", "N", "#00D4FF")
+        
+        forces_grid.addWidget(self.thrust_force_display, 0, 0)
+        forces_grid.addWidget(self.drag_force_display, 0, 1)
+        forces_grid.addWidget(self.chute_drag_display, 1, 0)
+        forces_grid.addWidget(self.weight_force_display, 1, 1)
+        forces_grid.addWidget(self.net_force_display, 2, 0, 1, 2)  # Span both columns
+        
+        layout.addLayout(forces_grid)
+        
+        # Initialize force diagram update
+        self.setup_initial_force_diagram()
+
+    def create_force_display(self, label, value, unit, color):
+        """Create a compact force value display"""
+        widget = QtWidgets.QFrame()
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(2)
+        
+        # Theme-aware styling
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            widget.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {theme['colors']['secondary_bg']};
+                    border: 1px solid {theme['colors']['accent']};
+                    border-radius: 4px;
+                }}
+                QLabel {{
+                    background-color: transparent;
+                    color: {theme['colors']['primary_text']};
+                }}
+            """)
+        else:
+            widget.setStyleSheet(f"""
+                QFrame {{
+                    background: {theme['telemetry']['bg']};
+                    border: 1px solid {theme['telemetry']['border']};
+                    border-radius: 3px;
+                }}
+                QLabel {{
+                    background-color: transparent;
+                    color: {theme['telemetry']['gauge_text']};
+                    font-family: 'Consolas', 'Monaco', monospace;
+                }}
+            """)
+        
+        # Label
+        label_widget = QtWidgets.QLabel(label)
+        label_widget.setAlignment(QtCore.Qt.AlignCenter)
+        label_widget.setStyleSheet(f"font-size: 9px; font-weight: bold; color: {color};")
+        layout.addWidget(label_widget)
+        
+        # Value
+        value_widget = QtWidgets.QLabel(f"{value} {unit}")
+        value_widget.setAlignment(QtCore.Qt.AlignCenter)
+        value_widget.setStyleSheet("font-size: 11px; font-weight: bold;")
+        layout.addWidget(value_widget)
+        
+        # Store references for updates
+        widget.label = label_widget
+        widget.value = value_widget
+        widget.unit = unit
+        
+        return widget
+
+    def setup_initial_force_diagram(self):
+        """Setup the initial force diagram visualization"""
+        import matplotlib.patches as patches
+        
+        self.force_ax.clear()
+        self.force_ax.set_xlim(-2, 2)
+        self.force_ax.set_ylim(-1, 4)
+        self.force_ax.set_aspect('equal')
+        self.force_ax.axis('off')
+        
+        # Initialize airflow particles for animation
+        import numpy as np
+        self.airflow_particles = []
+        for i in range(8):  # Create 8 airflow particles
+            particle = {
+                'x': np.random.uniform(-1.8, 1.8),
+                'y': np.random.uniform(0.5, 3.5),
+                'vx': 0.0,
+                'vy': 0.0,
+                'size': np.random.uniform(15, 30)
+            }
+            self.airflow_particles.append(particle)
+        
+        # Draw more realistic rocket shape
+        self.draw_rocket_body()
+        
+        # Add labels for vectors
+        theme_color = '#ECF0F1' if self.current_theme == "professional" else '#2C3E50'
+        self.force_ax.text(0, 0.5, 'Forces & Airflow', ha='center', va='center',
+                          fontsize=9, fontweight='bold', color=theme_color)
+        
+        self.force_canvas.draw()
+
+    def draw_rocket_body(self):
+        """Draw a more realistic rocket shape"""
+        import matplotlib.patches as patches
+        
+        # Main body (cylinder)
+        rocket_body = patches.Rectangle((-0.08, 1.5), 0.16, 0.8,
+                                      facecolor='#C0C0C0', edgecolor='black', linewidth=1.5)
+        self.force_ax.add_patch(rocket_body)
+        
+        # Nose cone (triangle)
+        nose_cone = patches.Polygon([(-0.08, 2.3), (0.08, 2.3), (0, 2.6)],
+                                   facecolor='#A0A0A0', edgecolor='black', linewidth=1.5)
+        self.force_ax.add_patch(nose_cone)
+        
+        # Fins (small triangles at base)
+        fin_left = patches.Polygon([(-0.08, 1.5), (-0.15, 1.3), (-0.08, 1.4)],
+                                  facecolor='#808080', edgecolor='black', linewidth=1)
+        fin_right = patches.Polygon([(0.08, 1.5), (0.15, 1.3), (0.08, 1.4)],
+                                   facecolor='#808080', edgecolor='black', linewidth=1)
+        self.force_ax.add_patch(fin_left)
+        self.force_ax.add_patch(fin_right)
+        
+        # Engine nozzle
+        nozzle = patches.Rectangle((-0.04, 1.4), 0.08, 0.1,
+                                 facecolor='#404040', edgecolor='black', linewidth=1)
+        self.force_ax.add_patch(nozzle)
+
+    def update_airflow_particles(self):
+        """Update and draw airflow particles showing air movement past rocket"""
+        import numpy as np
+        
+        if not hasattr(self, 'airflow_particles'):
+            return
+        
+        # Get rocket velocity components for airflow simulation
+        v_vertical = getattr(self, 'launch_velocity', 0.0) if hasattr(self, 'is_launching') and self.is_launching else 0.0
+        v_horizontal = getattr(self, 'launch_x_vel', 0.0) if hasattr(self, 'is_launching') and self.is_launching else 0.0
+        v_total = (v_vertical**2 + v_horizontal**2) ** 0.5
+        is_moving = v_total > 0.5
+        
+        # Update particle positions and velocities
+        for particle in self.airflow_particles:
+            if is_moving:
+                # Calculate airflow direction opposite to rocket motion
+                flow_direction_x = -v_horizontal / v_total if v_total > 0 else 0
+                flow_direction_y = -v_vertical / v_total if v_total > 0 else 0
+                
+                # Base flow speed scales with rocket speed
+                base_flow_speed = min(v_total * 0.02, 0.15)
+                
+                # Calculate distance from rocket centerline for flow deflection
+                rocket_center_x = 0.0
+                rocket_center_y = 2.0
+                distance_from_rocket = abs(particle['x'] - rocket_center_x)
+                
+                # Flow patterns around rocket based on rocket's motion direction
+                if particle['y'] > rocket_center_y:
+                    # Above rocket - flow around nose cone
+                    flow_deflection = 0.3 * np.exp(-distance_from_rocket * 3)
+                    particle['vx'] = flow_direction_x * base_flow_speed + np.sign(particle['x'] - rocket_center_x) * flow_deflection
+                    particle['vy'] = flow_direction_y * base_flow_speed * (1 + flow_deflection)
+                elif particle['y'] < rocket_center_y - 0.3:
+                    # Below rocket - wake turbulence
+                    particle['vx'] = flow_direction_x * base_flow_speed * 0.7 + np.random.uniform(-0.05, 0.05)
+                    particle['vy'] = flow_direction_y * base_flow_speed * 0.7
+                else:
+                    # Alongside rocket - fastest flow
+                    particle['vx'] = flow_direction_x * base_flow_speed * 1.2 + np.sign(particle['x'] - rocket_center_x) * base_flow_speed * 0.3
+                    particle['vy'] = flow_direction_y * base_flow_speed * 1.2
+            else:
+                # No airflow when rocket is stationary
+                particle['vx'] = 0
+                particle['vy'] = 0
+            
+            # Update particle position
+            particle['x'] += particle['vx']
+            particle['y'] += particle['vy']
+            
+            # Reset particles that go off screen
+            if particle['y'] < 0.5:
+                particle['x'] = np.random.uniform(-1.8, 1.8)
+                particle['y'] = 3.5
+                particle['size'] = np.random.uniform(15, 30)
+            elif particle['y'] > 3.5:
+                particle['x'] = np.random.uniform(-1.8, 1.8)
+                particle['y'] = 0.5
+                particle['size'] = np.random.uniform(15, 30)
+            elif abs(particle['x']) > 1.8:
+                particle['x'] = np.random.uniform(-1.8, 1.8)
+                particle['y'] = np.random.uniform(0.5, 3.5)
+                particle['size'] = np.random.uniform(15, 30)
+        
+        # Draw airflow particles
+        if is_moving:
+            # Draw particles as small circles with motion trails
+            for particle in self.airflow_particles:
+                # Particle color based on speed
+                speed = np.sqrt(particle['vx']**2 + particle['vy']**2)
+                alpha = min(0.6, 0.3 + speed * 2)  # More visible when moving faster
+                
+                if self.current_theme == "professional":
+                    color = '#00D4FF'  # Cyan for professional theme
+                else:
+                    color = '#BCA16A'  # Gold for retro theme
+                
+                # Draw particle
+                self.force_ax.scatter(particle['x'], particle['y'], 
+                                    s=particle['size'], c=color, alpha=alpha, marker='o')
+                
+                # Draw motion trail
+                if speed > 0.01:
+                    trail_length = min(0.2, speed * 2)
+                    trail_x = particle['x'] - particle['vx'] * trail_length * 10
+                    trail_y = particle['y'] - particle['vy'] * trail_length * 10
+                    self.force_ax.plot([trail_x, particle['x']], [trail_y, particle['y']],
+                                     color=color, alpha=alpha*0.5, linewidth=1.5)
+        else:
+            # Show static air particles when not moving
+            for particle in self.airflow_particles:
+                color = '#808080'  # Gray for static air
+                self.force_ax.scatter(particle['x'], particle['y'],
+                                    s=particle['size']*0.5, c=color, alpha=0.2, marker='o')
+
+    def draw_engine_exhaust(self, thrust_force, max_force):
+        """Draw animated engine exhaust plume"""
+        import numpy as np
+        import matplotlib.patches as patches
+        
+        # Exhaust parameters based on thrust
+        exhaust_intensity = thrust_force / max_force if max_force > 0 else 0
+        exhaust_length = 0.3 + exhaust_intensity * 0.4  # 0.3 to 0.7 units long
+        exhaust_width = 0.06 + exhaust_intensity * 0.04  # Variable width
+        
+        # Create exhaust plume points (triangle/cone shape)
+        nozzle_center_x = 0.0
+        nozzle_base_y = 1.4
+        
+        # Main exhaust cone
+        exhaust_points = np.array([
+            [nozzle_center_x - exhaust_width/2, nozzle_base_y],
+            [nozzle_center_x + exhaust_width/2, nozzle_base_y],
+            [nozzle_center_x, nozzle_base_y - exhaust_length]
+        ])
+        
+        # Exhaust colors (gradient from yellow to red)
+        exhaust_colors = ['#FFFF00', '#FF8000', '#FF4000']
+        
+        # Draw multiple exhaust layers for realistic effect
+        for i, color in enumerate(exhaust_colors):
+            scale_factor = 1.0 - i * 0.25  # Each layer slightly smaller
+            scaled_points = exhaust_points.copy()
+            
+            # Scale the exhaust cone
+            center_x = nozzle_center_x
+            center_y = nozzle_base_y - exhaust_length/2
+            
+            for j, point in enumerate(scaled_points):
+                if j < 2:  # Only scale width of base points
+                    scaled_points[j][0] = center_x + (point[0] - center_x) * scale_factor
+                scaled_points[j][1] = center_y + (point[1] - center_y) * scale_factor
+            
+            # Draw exhaust layer
+            exhaust_polygon = patches.Polygon(scaled_points, 
+                                            facecolor=color, 
+                                            alpha=0.6 - i*0.1,
+                                            edgecolor=None)
+            self.force_ax.add_patch(exhaust_polygon)
+        
+        # Add flickering exhaust particles
+        for _ in range(3):
+            particle_x = nozzle_center_x + np.random.uniform(-exhaust_width/3, exhaust_width/3)
+            particle_y = nozzle_base_y - np.random.uniform(0.1, exhaust_length * 0.8)
+            
+            self.force_ax.scatter(particle_x, particle_y,
+                                s=np.random.uniform(20, 50),
+                                c='#FFFF00', alpha=0.8, marker='*')
+
+    def draw_parachute(self, rocket_x, rocket_y, open_factor):
+        """Draw animated parachute above the rocket"""
+        import numpy as np
+        import matplotlib.patches as patches
+        
+        # Parachute position (above rocket)
+        chute_x = rocket_x
+        chute_y = rocket_y + 0.8 + (0.3 * open_factor)  # Rise as it opens
+        
+        # Parachute size based on opening factor
+        base_radius = 0.25
+        chute_radius = base_radius * (0.3 + 0.7 * open_factor)  # 30% to 100% size
+        
+        # Draw parachute canopy (circle/arc)
+        if open_factor > 0.1:
+            # Main canopy
+            canopy = patches.Circle((chute_x, chute_y), chute_radius,
+                                  facecolor='#FF6B6B', edgecolor='#D63031',
+                                  alpha=0.7 + 0.3 * open_factor, linewidth=1.5)
+            self.force_ax.add_patch(canopy)
+            
+            # Parachute lines (shroud lines)
+            num_lines = 6
+            for i in range(num_lines):
+                angle = (i * 2 * np.pi / num_lines) - np.pi/2  # Start from top
+                line_end_x = chute_x + chute_radius * 0.8 * np.cos(angle)
+                line_end_y = chute_y + chute_radius * 0.8 * np.sin(angle)
+                
+                # Draw line from rocket to parachute edge
+                self.force_ax.plot([rocket_x, line_end_x], [rocket_y + 0.5, line_end_y],
+                                 color='#2D3436', linewidth=1, alpha=0.8)
+            
+            # Central line from rocket to parachute center
+            self.force_ax.plot([rocket_x, chute_x], [rocket_y + 0.5, chute_y - chute_radius],
+                             color='#2D3436', linewidth=1.5, alpha=0.8)
+            
+            # Add deployment animation details
+            if open_factor < 1.0:
+                # Show parachute "inflating" with some flutter
+                flutter = 0.02 * np.sin(open_factor * 20)  # Small oscillation during opening
+                ripple_radius = chute_radius * (0.9 + 0.1 * np.sin(open_factor * 15))
+                
+                ripple = patches.Circle((chute_x, chute_y), ripple_radius,
+                                      facecolor='none', edgecolor='#FF6B6B',
+                                      alpha=0.3, linewidth=1, linestyle='--')
+                self.force_ax.add_patch(ripple)
+            
+            # Parachute label
+            self.force_ax.text(chute_x + chute_radius + 0.1, chute_y, 'CHUTE',
+                             fontsize=8, color='#D63031', fontweight='bold',
+                             rotation=0, ha='left', va='center')
+        else:
+            # Just starting to deploy - show small bundle
+            bundle = patches.Circle((chute_x, chute_y), 0.05,
+                                  facecolor='#FF6B6B', edgecolor='#D63031',
+                                  alpha=0.5, linewidth=1)
+            self.force_ax.add_patch(bundle)
+            
+            # Single line to rocket
+            self.force_ax.plot([rocket_x, chute_x], [rocket_y + 0.5, chute_y],
+                             color='#2D3436', linewidth=1, alpha=0.6)
+
+    def create_professional_gauge(self, label, value, unit, color):
+        """Create a professional aerospace-style gauge display"""
+        widget = QtWidgets.QFrame()
+        widget.setFrameStyle(QtWidgets.QFrame.StyledPanel)
+        widget.setStyleSheet(f"""
+            QFrame {{
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 rgba(26, 37, 47, 0.9), 
+                    stop: 1 rgba(15, 20, 25, 0.9));
+                border: 1px solid #34495E;
+                border-radius: 4px;
+                margin: 1px;
+            }}
+            QLabel {{
+                background-color: transparent;
+                color: #ECF0F1;
+            }}
+        """)
+        
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+        
+        # Label with professional styling
+        label_widget = QtWidgets.QLabel(label)
+        label_widget.setAlignment(QtCore.Qt.AlignCenter)
+        label_widget.setStyleSheet(f"""
+            font-size: 9px; 
+            color: {color}; 
+            font-weight: bold;
+            font-family: 'Consolas', 'Monaco', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 2px;
+        """)
+        
+        # Value display with larger, prominent font
+        value_text = f"{value} {unit}" if unit else value
+        value_widget = QtWidgets.QLabel(value_text)
+        value_widget.setAlignment(QtCore.Qt.AlignCenter)
+        value_widget.setStyleSheet(f"""
+            font-size: 16px; 
+            font-weight: bold; 
+            color: {color};
+            font-family: 'Consolas', 'Monaco', monospace;
+            padding: 4px;
+            border-bottom: 1px solid {color};
+        """)
+        
+        layout.addWidget(label_widget)
+        layout.addWidget(value_widget)
+        
+        # Store references for updates
+        widget.value_label = value_widget
+        widget.unit = unit
+        widget.gauge_color = color
+        
+        return widget
+
+    def create_professional_indicator(self, label):
+        """Create a professional status indicator like mission control"""
+        widget = QtWidgets.QFrame()
+        widget.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 rgba(26, 37, 47, 0.9), 
+                    stop: 1 rgba(15, 20, 25, 0.9));
+                border: 1px solid #34495E;
+                border-radius: 4px;
+                margin: 1px;
+                padding: 4px;
+            }
+        """)
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+        
+        # Status indicator (LED-style)
+        status_container = QtWidgets.QFrame()
+        status_container.setFixedHeight(20)
+        status_layout = QtWidgets.QHBoxLayout(status_container)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # LED indicator
+        led = QtWidgets.QLabel("●")
+        led.setAlignment(QtCore.Qt.AlignCenter)
+        led.setFixedSize(16, 16)
+        led.setStyleSheet("""
+            color: #555555;
+            font-size: 14px;
+            background: rgba(85, 85, 85, 0.3);
+            border-radius: 8px;
+        """)
+        
+        # Status text
+        status_text = QtWidgets.QLabel("OFFLINE")
+        status_text.setAlignment(QtCore.Qt.AlignCenter)
+        status_text.setStyleSheet("""
+            font-size: 8px;
+            color: #7F8C8D;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-weight: bold;
+            letter-spacing: 0.5px;
+        """)
+        
+        status_layout.addWidget(led)
+        status_layout.addWidget(status_text)
+        
+        # Label
+        label_widget = QtWidgets.QLabel(label)
+        label_widget.setAlignment(QtCore.Qt.AlignCenter)
+        label_widget.setStyleSheet("""
+            font-size: 9px; 
+            color: #00D4FF; 
+            font-weight: bold;
+            font-family: 'Consolas', 'Monaco', monospace;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        """)
+        
+        layout.addWidget(status_container)
+        layout.addWidget(label_widget)
+        
+        # Store references for updates
+        widget.led = led
+        widget.status_text = status_text
+        widget.is_active = False
+        
+        return widget
+
+    def update_professional_indicator(self, widget, active, status_text=None):
+        """Update professional status indicator"""
+        if widget.is_active != active:
+            widget.is_active = active
+            if active:
+                widget.led.setStyleSheet("""
+                    color: #00FF41;
+                    font-size: 14px;
+                    background: rgba(0, 255, 65, 0.2);
+                    border-radius: 8px;
+                    border: 1px solid #00FF41;
+                """)
+                widget.status_text.setStyleSheet("""
+                    font-size: 8px;
+                    color: #00FF41;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    font-weight: bold;
+                    letter-spacing: 0.5px;
+                """)
+                widget.status_text.setText(status_text or "ACTIVE")
+            else:
+                widget.led.setStyleSheet("""
+                    color: #555555;
+                    font-size: 14px;
+                    background: rgba(85, 85, 85, 0.3);
+                    border-radius: 8px;
+                """)
+                widget.status_text.setStyleSheet("""
+                    font-size: 8px;
+                    color: #7F8C8D;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    font-weight: bold;
+                    letter-spacing: 0.5px;
+                """)
+                widget.status_text.setText("OFFLINE")
+
+    def create_gauge_display(self, label, value, color):
+        """Create a clean, professional gauge-style display widget"""
+        widget = QtWidgets.QFrame()
+        widget.setFrameStyle(QtWidgets.QFrame.StyledPanel)
+        widget.setStyleSheet(f"""
+            QFrame {{
+                background-color: #FFFFFF;
+                border: 2px solid {color};
+                border-radius: 8px;
+                margin: 2px;
+            }}
+            QLabel {{
+                background-color: transparent;
+                color: #3C2F1E;
+            }}
+        """)
+        
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+        
+        # Label with icon-style formatting
+        label_widget = QtWidgets.QLabel(label)
+        label_widget.setAlignment(QtCore.Qt.AlignCenter)
+        label_widget.setStyleSheet(f"""
+            font-size: 10px; 
+            color: {color}; 
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        """)
+        
+        # Value with larger, prominent display
+        value_widget = QtWidgets.QLabel(value)
+        value_widget.setAlignment(QtCore.Qt.AlignCenter)
+        value_widget.setStyleSheet("""
+            font-size: 16px; 
+            font-weight: bold; 
+            color: #2C3E50;
+            padding: 4px;
+        """)
+        
+        layout.addWidget(label_widget)
+        layout.addWidget(value_widget)
+        
+        # Store value widget for updates
+        widget.value_label = value_widget
+        widget.gauge_color = color
+        
+        return widget
+
+    def create_status_light(self, label, icon, active):
+        """Create a professional status indicator with icon"""
+        widget = QtWidgets.QFrame()
+        widget.setStyleSheet("""
+            QFrame {
+                background-color: #FFFFFF;
+                border: 1px solid #BCA16A;
+                border-radius: 6px;
+                padding: 4px;
+            }
+        """)
+        layout = QtWidgets.QVBoxLayout(widget)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(2)
+        
+        # Status icon and indicator
+        status_layout = QtWidgets.QHBoxLayout()
+        
+        # Icon
+        icon_label = QtWidgets.QLabel(icon)
+        icon_label.setAlignment(QtCore.Qt.AlignCenter)
+        icon_label.setStyleSheet("font-size: 14px;")
+        
+        # Status circle
+        circle = QtWidgets.QLabel("●")
+        circle.setAlignment(QtCore.Qt.AlignCenter)
+        color = "#32CD32" if active else "#C0C0C0"
+        circle.setStyleSheet(f"color: {color}; font-size: 12px;")
+        
+        status_layout.addWidget(icon_label)
+        status_layout.addWidget(circle)
+        
+        # Label
+        text = QtWidgets.QLabel(label)
+        text.setAlignment(QtCore.Qt.AlignCenter)
+        text.setStyleSheet("""
+            font-size: 9px; 
+            color: #3C2F1E; 
+            font-weight: bold;
+            text-transform: uppercase;
+        """)
+        
+        layout.addLayout(status_layout)
+        layout.addWidget(text)
+        
+        # Store circle for updates
+        widget.status_circle = circle
+        widget.is_active = active
+        
+        return widget
+
+    def update_status_light(self, widget, active):
+        """Update the status of a status light with smooth color transition"""
+        if widget.is_active != active:
+            widget.is_active = active
+            color = "#32CD32" if active else "#C0C0C0"
+            widget.status_circle.setStyleSheet(f"color: {color}; font-size: 12px;")
+
+    def update_telemetry_displays(self):
+        """Update all telemetry displays with current data using theme-aware formatting"""
+        if hasattr(self, 'is_launching') and self.is_launching:
+            # Get current simulation state
+            try:
+                # Update from current animation state
+                altitude = getattr(self, 'launch_altitude', 0.0)
+                velocity = getattr(self, 'launch_velocity', 0.0)
+                time = getattr(self, 'launch_time', 0.0)
+                mass = getattr(self, 'launch_mass', 0.0)
+                
+                # Calculate additional metrics
+                acceleration = getattr(self, 'prev_acceleration', 0.0)
+                g_force = abs(acceleration) / 9.81
+                
+                # Get thrust from thrust curve
+                try:
+                    times_thrust, thrusts, thrust_func, burn_time = self.load_thrust_curve_data()
+                    current_thrust = float(thrust_func(time)) if time <= burn_time else 0.0
+                except:
+                    current_thrust = 0.0
+                
+                # Calculate drag force (approximation)
+                try:
+                    _, Cd, A, rho, _, _, _, _, _, _, _, _ = self.get_inputs_for_simulation()
+                    drag_force = 0.5 * rho * (velocity ** 2) * Cd * A if velocity > 0 else 0.0
+                except:
+                    drag_force = 0.0
+                
+                # Calculate Mach number
+                speed_of_sound = 343.0  # m/s at sea level
+                mach_number = abs(velocity) / speed_of_sound
+                
+                # Determine flight phase
+                if altitude <= 0 and velocity == 0:
+                    phase = "LANDED"
+                elif hasattr(self, 'chute_deployed') and self.chute_deployed:
+                    phase = "CHUTE DESCENT"
+                elif current_thrust > 10:
+                    phase = "POWERED ASCENT"
+                elif velocity > 0:
+                    phase = "COASTING"
+                elif velocity < 0:
+                    phase = "DESCENT"
+                else:
+                    phase = "LIFTOFF"
+                
+                # Update displays with theme-appropriate formatting
+                if self.current_theme == "retro":
+                    self.altitude_display.value_label.setText(f"{altitude:.1f} m")
+                    self.velocity_display.value_label.setText(f"{velocity:.1f} m/s")
+                    self.acceleration_display.value_label.setText(f"{acceleration:.1f} m/s²")
+                    self.g_force_display.value_label.setText(f"{g_force:.1f} G")
+                    self.thrust_display.value_label.setText(f"{current_thrust:.0f} N")
+                    self.drag_display.value_label.setText(f"{drag_force:.1f} N")
+                    self.mass_display.value_label.setText(f"{mass:.2f} kg")
+                    self.mach_display.value_label.setText(f"{mach_number:.2f}")
+                    self.time_display.setText(f"T+ {time:.1f}s")
+                else:
+                    self.altitude_display.value_label.setText(f"{altitude:.1f} m")
+                    self.velocity_display.value_label.setText(f"{velocity:.1f} m/s")
+                    self.acceleration_display.value_label.setText(f"{acceleration:.1f} m/s²")
+                    self.g_force_display.value_label.setText(f"{g_force:.1f} G")
+                    self.thrust_display.value_label.setText(f"{current_thrust:.0f} N")
+                    self.drag_display.value_label.setText(f"{drag_force:.1f} N")
+                    self.mass_display.value_label.setText(f"{mass:.2f} kg")
+                    self.mach_display.value_label.setText(f"{mach_number:.2f}")
+                    self.time_display.setText(f"T+ {time:06.1f}")
+                
+                self.phase_display.setText(phase)
+                
+                # Update status indicators based on theme
+                if self.current_theme == "retro":
+                    if hasattr(self, 'engine_status'):
+                        self.update_retro_indicator(self.engine_status, current_thrust > 10)
+                    if hasattr(self, 'chute_status'):
+                        self.update_retro_indicator(self.chute_status, getattr(self, 'chute_deployed', False))
+                    try:
+                        margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
+                        stable = margin > 0.05
+                        self.update_retro_indicator(self.stable_status, stable)
+                    except:
+                        self.update_retro_indicator(self.stable_status, True)
+                else:
+                    if hasattr(self, 'engine_status'):
+                        self.update_professional_indicator(self.engine_status, current_thrust > 10, "BURN" if current_thrust > 10 else None)
+                    if hasattr(self, 'chute_status'):
+                        self.update_professional_indicator(self.chute_status, getattr(self, 'chute_deployed', False), "DEPLOYED" if getattr(self, 'chute_deployed', False) else None)
+                    try:
+                        margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
+                        stable = margin > 0.05
+                        self.update_professional_indicator(self.stable_status, stable, "STABLE" if stable else "UNSTABLE")
+                    except:
+                        self.update_professional_indicator(self.stable_status, True, "STABLE")
+                    
+            except Exception as e:
+                pass  # Silently handle any telemetry update errors
+        else:
+            # Reset displays when not launching - theme-appropriate formatting
+            if self.current_theme == "retro":
+                self.altitude_display.value_label.setText("0.0 m")
+                self.velocity_display.value_label.setText("0.0 m/s")
+                self.acceleration_display.value_label.setText("0.0 m/s²")
+                self.g_force_display.value_label.setText("0.0 G")
+                self.thrust_display.value_label.setText("0 N")
+                self.drag_display.value_label.setText("0.0 N")
+                self.time_display.setText("T+ 0.0s")
+            else:
+                self.altitude_display.value_label.setText("0.0 m")
+                self.velocity_display.value_label.setText("0.0 m/s")
+                self.acceleration_display.value_label.setText("0.0 m/s²")
+                self.g_force_display.value_label.setText("0.0 G")
+                self.thrust_display.value_label.setText("0 N")
+                self.drag_display.value_label.setText("0.0 N")
+                self.time_display.setText("T+ 000.0")
+            
+            try:
+                m, _, _, _, _, _, _, _, _, _, _, _ = self.get_inputs_for_simulation()
+                self.mass_display.value_label.setText(f"{m:.2f} kg")
+            except:
+                self.mass_display.value_label.setText("0.0 kg")
+            
+            self.mach_display.value_label.setText("0.00")
+            self.phase_display.setText("STANDBY")
+            
+            # Update status indicators for standby
+            if self.current_theme == "retro":
+                if hasattr(self, 'engine_status'):
+                    self.update_retro_indicator(self.engine_status, False)
+                if hasattr(self, 'chute_status'):
+                    self.update_retro_indicator(self.chute_status, False)
+                try:
+                    margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
+                    stable = margin > 0.05
+                    self.update_retro_indicator(self.stable_status, stable)
+                except:
+                    self.update_retro_indicator(self.stable_status, True)
+            else:
+                if hasattr(self, 'engine_status'):
+                    self.update_professional_indicator(self.engine_status, False)
+                if hasattr(self, 'chute_status'):
+                    self.update_professional_indicator(self.chute_status, False)
+                try:
+                    margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
+                    stable = margin > 0.05
+                    self.update_professional_indicator(self.stable_status, stable, "STABLE" if stable else "UNSTABLE")
+                except:
+                    self.update_professional_indicator(self.stable_status, True, "STABLE")
+
+    def update_force_diagram(self):
+        """Update the real-time force vector diagram"""
+        if not hasattr(self, 'force_ax') or not hasattr(self, 'force_canvas'):
+            return
+            
+        # Clear and reset the diagram
+        self.force_ax.clear()
+        self.force_ax.set_xlim(-2, 2)
+        self.force_ax.set_ylim(-1, 4)
+        self.force_ax.set_aspect('equal')
+        self.force_ax.axis('off')
+        
+        import matplotlib.patches as patches
+        
+        # Draw enhanced rocket body instead of simple rectangle
+        self.draw_rocket_body()
+        
+        # Update and draw airflow particles
+        self.update_airflow_particles()
+        
+        if hasattr(self, 'is_launching') and self.is_launching:
+            # Get current forces from simulation
+            try:
+                # Calculate current forces
+                _, Cd, A, rho, _, _, _, _, _, _, _, _ = self.get_inputs_for_simulation()
+                
+                # Get current values
+                velocity = getattr(self, 'launch_velocity', 0.0)
+                mass = getattr(self, 'launch_mass', 0.0)
+                time = getattr(self, 'launch_time', 0.0)
+                
+                # Get thrust from thrust curve
+                times_thrust, thrusts, thrust_func, burn_time = self.load_thrust_curve_data()
+                thrust_force = float(thrust_func(time)) if time <= burn_time else 0.0
+                
+                # Calculate drag force
+                drag_force = 0.5 * rho * (velocity ** 2) * Cd * A if velocity != 0 else 0.0
+                drag_force = abs(drag_force)  # Always positive magnitude
+                
+                # Check for parachute deployment and calculate parachute drag
+                chute_deployed = getattr(self, 'chute_deployed', False)
+                chute_drag_force = 0.0
+                if chute_deployed:
+                    try:
+                        chute_cd = 1.5  # Typical parachute drag coefficient
+                        _, _, _, _, _, _, _, _, _, chute_size, _, _ = self.get_inputs_for_simulation()
+                        if chute_size and chute_size > 0:
+                            chute_open_factor = getattr(self, 'chute_open_factor', 1.0)
+                            effective_chute_area = chute_size * chute_open_factor
+                            chute_drag_force = 0.5 * rho * (velocity ** 2) * chute_cd * effective_chute_area if velocity != 0 else 0.0
+                            chute_drag_force = abs(chute_drag_force)
+                    except:
+                        chute_drag_force = 0.0
+                
+                # Total drag is body drag + parachute drag
+                total_drag_force = drag_force + chute_drag_force
+                
+                # Weight force
+                weight_force = mass * 9.81
+                
+                # Net force (upward positive) - include parachute drag in calculation
+                net_force = thrust_force - total_drag_force - weight_force
+                
+                # Scale factors for display (normalize to largest force for visibility)
+                max_force = max(thrust_force, total_drag_force, weight_force, abs(net_force), 1.0)
+                scale = 1.0 / max_force  # Scale to unit vectors, then apply display scale
+                display_scale = 0.8  # Maximum arrow length
+                
+                # Draw parachute if deployed
+                if chute_deployed:
+                    self.draw_parachute(rocket_center_x, rocket_center_y, chute_open_factor)
+                
+                # Draw force vectors
+                rocket_center_x, rocket_center_y = 0.0, 2.0
+                
+                # Thrust vector (upward, green)
+                if thrust_force > 0:
+                    thrust_length = thrust_force * scale * display_scale
+                    self.force_ax.arrow(rocket_center_x, rocket_center_y, 0, thrust_length,
+                                       head_width=0.08, head_length=0.06, fc='#00FF00', ec='#00FF00',
+                                       linewidth=2, alpha=0.8)
+                    self.force_ax.text(rocket_center_x + 0.3, rocket_center_y + thrust_length/2,
+                                      f'T={thrust_force:.0f}N', fontsize=8, color='#00FF00', fontweight='bold')
+                    
+                    # Add engine exhaust visualization
+                    self.draw_engine_exhaust(thrust_force, max_force)
+                
+                # Drag vector (downward, red) - body drag only
+                if drag_force > 0 and abs(velocity) > 0.1:
+                    drag_length = drag_force * scale * display_scale
+                    drag_direction = -1 if velocity > 0 else 1  # Oppose motion
+                    self.force_ax.arrow(rocket_center_x - 0.3, rocket_center_y, 0, drag_direction * drag_length,
+                                       head_width=0.08, head_length=0.06, fc='#FF4444', ec='#FF4444',
+                                       linewidth=2, alpha=0.8)
+                    self.force_ax.text(rocket_center_x - 0.6, rocket_center_y + (drag_direction * drag_length)/2,
+                                      f'D={drag_force:.0f}N', fontsize=8, color='#FF4444', fontweight='bold')
+                
+                # Parachute drag vector (separate from body drag, purple/magenta)
+                if chute_deployed and chute_drag_force > 0 and abs(velocity) > 0.1:
+                    chute_drag_length = chute_drag_force * scale * display_scale
+                    chute_drag_direction = -1 if velocity > 0 else 1  # Oppose motion
+                    self.force_ax.arrow(rocket_center_x - 0.6, rocket_center_y + 0.8, 0, chute_drag_direction * chute_drag_length,
+                                       head_width=0.08, head_length=0.06, fc='#FF00FF', ec='#FF00FF',
+                                       linewidth=2, alpha=0.8)
+                    self.force_ax.text(rocket_center_x - 0.9, rocket_center_y + 0.8 + (chute_drag_direction * chute_drag_length)/2,
+                                      f'CD={chute_drag_force:.0f}N', fontsize=8, color='#FF00FF', fontweight='bold')
+                
+                # Weight vector (downward, orange)
+                if weight_force > 0:
+                    weight_length = weight_force * scale * display_scale
+                    self.force_ax.arrow(rocket_center_x + 0.3, rocket_center_y, 0, -weight_length,
+                                       head_width=0.08, head_length=0.06, fc='#FFAA00', ec='#FFAA00',
+                                       linewidth=2, alpha=0.8)
+                    self.force_ax.text(rocket_center_x + 0.6, rocket_center_y - weight_length/2,
+                                      f'W={weight_force:.0f}N', fontsize=8, color='#FFAA00', fontweight='bold')
+                
+                # Net force vector (cyan, from center)
+                if abs(net_force) > 1.0:  # Only show if significant
+                    net_length = abs(net_force) * scale * display_scale
+                    net_direction = 1 if net_force > 0 else -1
+                    self.force_ax.arrow(rocket_center_x, rocket_center_y - 0.8, 0, net_direction * net_length,
+                                       head_width=0.12, head_length=0.08, fc='#00D4FF', ec='#00D4FF',
+                                       linewidth=3, alpha=0.9)
+                    self.force_ax.text(rocket_center_x - 0.8, rocket_center_y - 0.8 + (net_direction * net_length)/2,
+                                      f'Net={net_force:.0f}N', fontsize=8, color='#00D4FF', fontweight='bold')
+                
+                # Update force displays
+                if hasattr(self, 'thrust_force_display'):
+                    self.thrust_force_display.value.setText(f"{thrust_force:.0f} {self.thrust_force_display.unit}")
+                    self.drag_force_display.value.setText(f"{drag_force:.0f} {self.drag_force_display.unit}")
+                    self.chute_drag_display.value.setText(f"{chute_drag_force:.0f} {self.chute_drag_display.unit}")
+                    self.weight_force_display.value.setText(f"{weight_force:.0f} {self.weight_force_display.unit}")
+                    self.net_force_display.value.setText(f"{net_force:.0f} {self.net_force_display.unit}")
+                    
+                    # Update chute drag display color based on deployment
+                    if chute_deployed:
+                        self.chute_drag_display.label.setStyleSheet("font-size: 9px; font-weight: bold; color: #FF00FF;")
+                    else:
+                        self.chute_drag_display.label.setStyleSheet("font-size: 9px; font-weight: bold; color: #808080;")
+                
+            except Exception as e:
+                # On error, show default state
+                self.setup_initial_force_diagram()
+                return
+        else:
+            # Standby state - show static rocket with zero forces
+            try:
+                m, _, _, _, _, _, _, _, _, _, _, _ = self.get_inputs_for_simulation()
+                weight_force = m * 9.81
+                
+                if hasattr(self, 'thrust_force_display'):
+                    self.thrust_force_display.value.setText(f"0 {self.thrust_force_display.unit}")
+                    self.drag_force_display.value.setText(f"0 {self.drag_force_display.unit}")
+                    self.chute_drag_display.value.setText(f"0 {self.chute_drag_display.unit}")
+                    self.weight_force_display.value.setText(f"{weight_force:.0f} {self.weight_force_display.unit}")
+                    self.net_force_display.value.setText(f"0 {self.net_force_display.unit}")
+                    
+                    # Gray out chute display when not deployed
+                    self.chute_drag_display.label.setStyleSheet("font-size: 9px; font-weight: bold; color: #808080;")
+            except:
+                if hasattr(self, 'thrust_force_display'):
+                    self.thrust_force_display.value.setText(f"0 {self.thrust_force_display.unit}")
+                    self.drag_force_display.value.setText(f"0 {self.drag_force_display.unit}")
+                    self.chute_drag_display.value.setText(f"0 {self.chute_drag_display.unit}")
+                    self.weight_force_display.value.setText(f"0 {self.weight_force_display.unit}")
+                    self.net_force_display.value.setText(f"0 {self.net_force_display.unit}")
+                    
+                    # Gray out chute display
+                    self.chute_drag_display.label.setStyleSheet("font-size: 9px; font-weight: bold; color: #808080;")
+        
+        # Add title
+        theme_color = '#ECF0F1' if self.current_theme == "professional" else '#2C3E50'
+        self.force_ax.text(0, 3.5, 'Live Forces', ha='center', va='center',
+                          fontsize=9, fontweight='bold', color=theme_color)
+        
+        # Refresh display
+        self.force_canvas.draw()
+
+    def update_retro_indicator(self, widget, active):
+        """Update retro-style status indicator"""
+        if widget.is_active != active:
+            widget.is_active = active
+            theme = self.themes["retro"]
+            color = theme['telemetry']['status_active'] if active else theme['telemetry']['status_inactive']
+            widget.status_circle.setStyleSheet(f"color: {color}; font-size: 12px;")
+
+    def update_professional_indicator(self, widget, active, text=None):
+        """Update professional-style status indicator"""
+        if widget.is_active != active or (text and hasattr(widget, 'status_text') and widget.status_text.text() != text):
+            widget.is_active = active
+            theme = self.themes["professional"]
+            
+            # Update indicator light
+            color = theme['telemetry']['status_active'] if active else theme['telemetry']['status_inactive']
+            widget.led.setStyleSheet(f"""
+                QLabel {{
+                    color: {color};
+                    font-size: 14px;
+                    font-weight: bold;
+                    background: rgba(0, 255, 65, 0.2);
+                    border-radius: 8px;
+                }}
+            """)
+            
+            # Update status text if provided
+            if text and hasattr(widget, 'status_text'):
+                widget.status_text.setText(text)
+                text_color = theme['telemetry']['status_active'] if active else theme['telemetry']['gauge_text']
+                widget.status_text.setStyleSheet(f"""
+                    QLabel {{
+                        color: {text_color};
+                        font-size: 9px;
+                        font-family: 'Courier New';
+                        font-weight: bold;
+                    }}
+                """)
+
+    def on_theme_changed(self, theme_name):
+        """Handle theme selection change"""
+        if theme_name != self.current_theme:
+            self.current_theme = theme_name
+            self.apply_theme(theme_name)
+            
+            # Save theme preference
+            try:
+                settings = self.load_settings()
+                settings['theme'] = theme_name
+                self.save_settings(settings)
+            except:
+                pass
 
     def toggle_fbd_animation(self):
         if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
@@ -1907,30 +4004,41 @@ if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     app.setStyleSheet(retro_style)
 
-
-    # Splash screen with reliability checks
+    # Splash screen with GIF animation
     gif_path = os.path.join(os.path.dirname(__file__), 'jarvis.gif')
     splash_movie = QtGui.QMovie(gif_path)
-    if not splash_movie.isValid():
+    
+    if splash_movie.isValid():
+        splash_label = QtWidgets.QLabel()
+        splash_label.setMovie(splash_movie)
+        splash_label.setWindowFlags(QtCore.Qt.SplashScreen | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+        splash_label.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        splash_label.setAlignment(QtCore.Qt.AlignCenter)
+        
+        # Center the splash screen
+        screen = app.primaryScreen().geometry()
+        splash_label.resize(400, 300)  # Set appropriate size
+        splash_label.move((screen.width() - 400) // 2, (screen.height() - 300) // 2)
+        
+        # Start animation and show
+        splash_movie.start()
+        splash_label.movie = splash_movie  # Prevent garbage collection
+        splash_label.show()
+        app.processEvents()
+        
+        # Show splash for 4 seconds, then show main window
+        def show_main():
+            splash_label.close()
+            splash_movie.stop()
+            window.show()
+        
+        window = RocketSimulationUI()
+        QtCore.QTimer.singleShot(4000, show_main)
+    else:
         print(f"Could not load splash GIF: {gif_path}")
-    splash_label = QtWidgets.QLabel()
-    splash_label.setMovie(splash_movie)
-    splash_label.setWindowFlags(QtCore.Qt.SplashScreen | QtCore.Qt.FramelessWindowHint)
-    splash_label.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-
-    splash_movie.start()
-    splash_label.movie = splash_movie  # Prevent garbage collection
-    splash_label.show()
-    app.processEvents()
-
-    gif_path = os.path.join(os.path.dirname(__file__), 'Jarvis.gif')    # Show splash for 3 seconds, then close and show main window
-    def show_main():
-        splash_label.close()
-        splash_movie.stop()
+        # Show main window immediately if GIF fails to load
+        window = RocketSimulationUI()
         window.show()
-
-    window = RocketSimulationUI()
-    QtCore.QTimer.singleShot(5000, show_main)
 
     sys.exit(app.exec_())
 
