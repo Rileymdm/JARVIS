@@ -15,66 +15,8 @@ from scipy.interpolate import interp1d
 import matplotlib.patches as mpatches
 
 # === FULL RETRO PIXEL STYLE ===
-retro_style = """
-from scipy.ndimage import rotate
-QProgressBar {
-    background-color: #FDF6E3;
-    border: 2px solid #BCA16A;
-    border-radius: 8px;
-    height: 18px;
-    color: #3C2F1E;
-}
-QProgressBar::chunk {
-    background-color: #E94F37;
-    width: 8px;
-}
-
-QToolBar {
-    background-color: #F8F5E3;
-    border: 2px solid #BCA16A;
-    color: #3C2F1E;
-    font-family: 'Press Start 2P', monospace;
-    font-size: 12px;
-}
-QWidget {
-    background-color: #F8F5E3; /* 8BitDo beige */
-    font-family: 'Press Start 2P', monospace;
-    font-size: 12px;
-    color: #3C2F1E; /* dark brown */
-}
-
-QLineEdit {
-    background-color: #FDF6E3; /* lighter beige */
-    border: 2px solid #BCA16A; /* brown accent */
-    border-radius: 4px;
-    padding: 4px;
-    color: #3C2F1E;
-}
-
-QPushButton {
-    background-color: #E94F37; /* 8BitDo red */
-    border: 2px solid #3C2F1E;
-    border-radius: 6px;
-    padding: 6px;
-    font-weight: bold;
-    color: #F8F5E3;
-}
-
-QPushButton:hover {
-    background-color: #FFD447; /* 8BitDo yellow */
-    border: 2px solid #E94F37;
-    color: #3C2F1E;
-}
-
-QLabel {
-    font-weight: bold;
-    color: #3C2F1E;
-}
-
-QSplitter::handle {
-    background-color: #BCA16A;
-}
-"""
+# NOTE: Removed use of a global app stylesheet to avoid forcing retro styles over other themes.
+# Theme application is now handled per-widget via apply_theme().
 # === END RETRO STYLE ===
 
 class CrashImageDialog(QtWidgets.QDialog):
@@ -117,6 +59,145 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.load_inputs()  # Load inputs on startup
         self.apply_theme(self.current_theme)  # Apply initial theme
         self.showMaximized()
+
+    # ---- THEME-AWARE STYLING HELPERS ----
+    def get_plot_style(self):
+        """Return a dict of matplotlib styling values based on the current theme."""
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            return {
+                'fig_face': theme['plot_bg'],            # #F8F5E3
+                'ax_face': theme['colors']['secondary_bg'],  # #FDF6E3
+                'grid_color': theme['colors']['accent'],     # #BCA16A
+                'grid_alpha': 0.3,
+                'spine_color': theme['colors']['button_bg'], # #E94F37
+                'spine_lw': 2.0,
+                'tick_color': theme['colors']['primary_text'],
+                'label_color': theme['colors']['primary_text'],
+                'title_color': theme['colors']['primary_text'],
+                'legend_face': theme['colors']['secondary_bg'],
+                'legend_edge': theme['colors']['accent']
+            }
+        else:  # professional
+            return {
+                'fig_face': theme['plot_bg'],             # #1A252F
+                'ax_face': theme['colors']['secondary_bg'],  # #34495E
+                'grid_color': theme['colors']['primary_bg'], # #2C3E50
+                'grid_alpha': 0.35,
+                'spine_color': theme['colors']['accent'],    # #00D4FF
+                'spine_lw': 1.2,
+                'tick_color': theme['colors']['primary_text'], # #ECF0F1
+                'label_color': theme['colors']['primary_text'],
+                'title_color': theme['colors']['primary_text'],
+                'legend_face': '#2C3E50',
+                'legend_edge': theme['colors']['accent']
+            }
+
+    def style_axes(self, ax):
+        """Apply theme-aware styling to a matplotlib Axes."""
+        style = self.get_plot_style()
+        # Figure and axes backgrounds
+        if ax.figure is not None:
+            ax.figure.patch.set_facecolor(style['fig_face'])
+        ax.set_facecolor(style['ax_face'])
+        # Grid
+        ax.grid(True, alpha=style['grid_alpha'], color=style['grid_color'], linestyle=':')
+        # Spines
+        for spine in ax.spines.values():
+            spine.set_color(style['spine_color'])
+            spine.set_linewidth(style['spine_lw'])
+        # Ticks and labels
+        ax.tick_params(axis='both', colors=style['tick_color'])
+        ax.xaxis.label.set_color(style['label_color'])
+        ax.yaxis.label.set_color(style['label_color'])
+        ax.title.set_color(style['title_color'])
+        # Legend (if exists)
+        leg = ax.get_legend()
+        if leg is not None:
+            leg.get_frame().set_facecolor(style['legend_face'])
+            leg.get_frame().set_edgecolor(style['legend_edge'])
+            for text in leg.get_texts():
+                text.set_color(style['tick_color'])
+
+    def style_toolbar(self):
+        """Apply theme-aware styling to the matplotlib navigation toolbar."""
+        if not hasattr(self, 'toolbar'):
+            return
+        theme = self.themes[self.current_theme]
+        if self.current_theme == "retro":
+            ss = f"""
+                QWidget {{
+                    background-color: {theme['colors']['primary_bg']};
+                    border: 2px solid {theme['colors']['accent']};
+                    color: {theme['colors']['primary_text']};
+                    font-family: 'Press Start 2P', monospace;
+                    font-size: 12px;
+                }}
+            """
+        else:
+            # Subtle, dark toolbar with accent border
+            ss = f"""
+                QWidget {{
+                    background-color: {theme['colors']['primary_bg']};
+                    border: 1px solid {theme['colors']['accent']};
+                    color: {theme['colors']['primary_text']};
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    font-size: 12px;
+                }}
+            """
+        # Apply the stylesheet to the toolbar
+        self.toolbar.setStyleSheet(ss)
+
+    # ---- Launch angle recommendation helpers ----
+    def compute_recommended_launch_angle_deg(self):
+        """Recommend a small tilt (±0–5°) into the wind. 0° when calm.
+        Simple heuristic: angle = clamp(k * wind_speed, 0..5), sign into-wind.
+        We interpret positive angle as tilting toward wind direction's coming-from azimuth to reduce drift.
+        """
+        try:
+            ws = float(self.wind_speed_input.value())  # m/s
+            wd = float(self.wind_direction_input.value())  # degrees, 0..359
+        except Exception:
+            return 0.0
+        # Map speed to degrees with a gentle slope. Example: 0 deg at 0 m/s, 5 deg at >= 10 m/s
+        k = 5.0 / 10.0
+        mag = max(0.0, min(5.0, k * ws))
+        # Sign convention: positive angle means tilt to the right in our XY view. We can map wind direction to a left/right component.
+        # For simplicity in 2D, use cosine to decide sign: wind from 90° (from +X) -> tilt negative (left), from 270° -> tilt positive (right)
+        # Compute sign = -cos(wd) so that wind from +X (90°) gives negative tilt; from -X (270°) gives positive.
+        sign = -math.cos(math.radians(wd))
+        # Normalize sign to -1, 0, 1 threshold to avoid tiny noise
+        s = 1.0 if sign > 0.2 else (-1.0 if sign < -0.2 else 0.0)
+        return mag * s
+
+    def update_recommended_launch_angle_label(self):
+        rec = self.compute_recommended_launch_angle_deg()
+        ws = self.wind_speed_input.value()
+        if abs(rec) < 0.05:
+            txt = f"Recommended: 0.0° (calm)"
+        else:
+            txt = f"Recommended: {rec:+.1f}° (wind {ws:.1f} m/s)"
+        if hasattr(self, 'recommended_angle_label'):
+            self.recommended_angle_label.setText(txt)
+
+    def apply_recommended_launch_angle(self):
+        rec = self.compute_recommended_launch_angle_deg()
+        # Bound to control range just in case
+        rec = max(self.launch_angle_input.minimum(), min(self.launch_angle_input.maximum(), rec))
+        self.launch_angle_input.setValue(rec)
+
+    def restyle_all_plots(self):
+        """Restyle any existing figures/axes and redraw canvases."""
+        # Main results figure
+        if hasattr(self, 'figure') and hasattr(self, 'canvas'):
+            for ax in self.figure.axes:
+                self.style_axes(ax)
+            self.canvas.draw_idle()
+        # Launch/animation figure
+        if hasattr(self, 'launch_fig') and hasattr(self, 'launch_canvas'):
+            for ax in self.launch_fig.axes:
+                self.style_axes(ax)
+            self.launch_canvas.draw_idle()
 
     def setup_themes(self):
         """Define all available themes for the application"""
@@ -198,10 +279,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Update plot backgrounds
         if hasattr(self, 'canvas'):
             self.canvas.figure.patch.set_facecolor(theme["plot_bg"])
-            self.canvas.draw()
+            self.restyle_all_plots()
         if hasattr(self, 'launch_canvas'):
             self.launch_canvas.figure.patch.set_facecolor(theme["plot_bg"])
-            self.launch_canvas.draw()
+            self.restyle_all_plots()
+
+        # Update toolbar styling
+        self.style_toolbar()
         
         # Update force diagram styling
         if hasattr(self, 'force_widget'):
@@ -468,15 +552,39 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     def update_telemetry_theme(self):
         """Update telemetry dashboard styling based on current theme"""
-        if not hasattr(self, 'altitude_display'):
+        if not hasattr(self, 'telemetry_widget'):
             return
-            
-        theme = self.themes[self.current_theme]
-        
-        # This method will be called to refresh telemetry components with new theme
-        # The telemetry components will be recreated with the new theme automatically
-        # when the main style is applied
-        pass
+        # Stop previous timer if any
+        try:
+            if hasattr(self, 'telemetry_timer') and self.telemetry_timer is not None:
+                self.telemetry_timer.stop()
+                self.telemetry_timer.deleteLater()
+        except Exception:
+            pass
+        self.telemetry_timer = None
+
+        # Clear telemetry widget layout and rebuild with current theme
+        layout = self.telemetry_widget.layout()
+        if layout is None:
+            layout = QtWidgets.QVBoxLayout(self.telemetry_widget)
+
+        def clear_layout(lay):
+            while lay.count():
+                item = lay.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
+                else:
+                    sub = item.layout()
+                    if sub is not None:
+                        clear_layout(sub)
+        clear_layout(layout)
+
+        # Reapply container/header styling then recreate dashboard
+        self.setup_telemetry_widget_styling()
+        self.setup_telemetry_header()
+        self.create_telemetry_dashboard(layout)
+        self.setup_status_display_styling()
 
     def setup_telemetry_widget_styling(self):
         """Apply theme-aware styling to telemetry widget"""
@@ -974,7 +1082,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
         # Buttons
         self.thrust_curve_path = None
-        self.select_thrust_button = QtWidgets.QPushButton('Select Thrust Curve CSV')
+        self.select_thrust_button = QtWidgets.QPushButton('Select Thrust Curve File')
         self.select_thrust_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.select_thrust_button.clicked.connect(self.select_thrust_curve)
         left_layout.addWidget(self.select_thrust_button)
@@ -1035,7 +1143,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         graph_layout.addWidget(self.canvas)
         self.toolbar = NavigationToolbar(self.canvas, self)
-        self.toolbar.setStyleSheet("background-color: #F8F5E3; border: 2px solid #BCA16A; color: #3C2F1E; font-family: 'Press Start 2P', monospace; font-size: 12px;")
+        self.style_toolbar()
         graph_layout.addWidget(self.toolbar)
         self.graph_tab_widget.addTab(graph_tab, "Graph")
 
@@ -1196,10 +1304,23 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
         self.launch_angle_input = QtWidgets.QDoubleSpinBox()
         self.launch_angle_input.setRange(-45.0, 45.0)
+        self.launch_angle_input.setSingleStep(0.5)
         self.launch_angle_input.setValue(0.0)
         self.launch_angle_input.setSuffix("°")
-        self.launch_angle_input.setToolTip("Launch guide cocking angle (0° = vertical)")
-        stability_layout.addRow("Launch Guide Angle:", self.launch_angle_input)
+        self.launch_angle_input.setToolTip("Launch angle as deviation from vertical (0° = vertical). Safety recommendation: keep within ±5° unless site RSO allows more.")
+        stability_layout.addRow("Launch Angle (± from vertical):", self.launch_angle_input)
+
+        # Recommended launch angle (±0–5°) based on wind — tilt slightly into the wind
+        rec_row = QtWidgets.QHBoxLayout()
+        self.recommended_angle_label = QtWidgets.QLabel("Recommended: 0.0° (calm)")
+        self.recommended_angle_label.setToolTip("Computed from wind speed and direction; bounded to ±5°")
+        self.apply_recommended_btn = QtWidgets.QPushButton("Apply")
+        self.apply_recommended_btn.setToolTip("Set launch angle to the recommended value")
+        self.apply_recommended_btn.clicked.connect(self.apply_recommended_launch_angle)
+        rec_row.addWidget(self.recommended_angle_label)
+        rec_row.addStretch(1)
+        rec_row.addWidget(self.apply_recommended_btn)
+        stability_layout.addRow("Recommendation:", rec_row)
 
         self.stability_status_label = QtWidgets.QLabel("Stability Margin: 0.2 m (Stable)")
         self.stability_status_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -1217,6 +1338,15 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.center_of_mass_input.valueChanged.connect(update_stability)
         self.center_of_pressure_input.valueChanged.connect(update_stability)
         update_stability()
+
+        # Update recommended angle label initially and when wind/angle changes
+        def _update_rec_label():
+            self.update_recommended_launch_angle_label()
+        self.wind_speed_input.valueChanged.connect(_update_rec_label)
+        self.wind_direction_input.valueChanged.connect(_update_rec_label)
+        self.launch_angle_input.valueChanged.connect(_update_rec_label)
+        # Initialize recommendation display
+        QtCore.QTimer.singleShot(0, self.update_recommended_launch_angle_label)
 
         launch_anim_layout.addWidget(stability_group)
 
@@ -1447,11 +1577,11 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 ax.set_xlim(-2, 2)
                 ax.set_ylim(0, 3)
             
-            ax.set_xlabel('Drift (m)', color='#3C2F1E')
-            ax.set_ylabel('Altitude (m)', color='#3C2F1E')
-            ax.grid(True, alpha=0.3, color='#BCA16A')
+            ax.set_xlabel('Drift (m)')
+            ax.set_ylabel('Altitude (m)')
+            # Apply theme-aware styling
+            self.style_axes(ax)
             ax.legend(loc='upper left')
-            ax.set_facecolor('#FDF6E3')  # Light beige background
             
             # Add stability warning text
             if not stable:
@@ -1529,22 +1659,20 @@ class RocketSimulationUI(QtWidgets.QWidget):
         """Load thrust curve data from file or use default. Returns (times, thrusts, thrust_func, burn_time)"""
         thrust_data = []
         if hasattr(self, 'thrust_curve_path') and self.thrust_curve_path:
+            path = self.thrust_curve_path
+            _, ext = os.path.splitext(path.lower())
             try:
-                with open(self.thrust_curve_path, newline='') as csvfile:
-                    reader = csv.reader(csvfile)
-                    for row in reader:
-                        if not row or len(row) < 2:
-                            continue
-                        try:
-                            t_thrust = float(row[0])
-                            thrust = float(row[1])
-                            thrust_data.append((t_thrust, thrust))
-                        except:
-                            continue
-            except:
+                if ext == '.csv':
+                    thrust_data = self.parse_csv_thrust(path)
+                elif ext in ('.eng', '.rasp'):
+                    thrust_data = self.parse_rasp_eng_thrust(path)
+                else:
+                    # Try CSV as a fallback
+                    thrust_data = self.parse_csv_thrust(path)
+            except Exception:
                 thrust_data = []
         
-        if not thrust_data:
+        if not thrust_data or len(thrust_data) < 2:
             # Default thrust curve
             thrust_data = [
                 (0.124, 816.849), (0.375, 796.043), (0.626, 781.861), (0.877, 767.440),
@@ -1556,10 +1684,102 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 (6.156, 25.914), (6.408, 0.000)
             ]
         
-        times_thrust, thrusts = zip(*thrust_data)
+        # Deduplicate exact or near-equal times to ensure strictly increasing for interp1d
+        deduped = []
+        last_t = None
+        for t, y in sorted(thrust_data, key=lambda p: p[0]):
+            if last_t is None or t > last_t + 1e-9:
+                deduped.append((t, y))
+                last_t = t
+            else:
+                # Replace previous with latest value at same timestamp
+                deduped[-1] = (t, y)
+                last_t = t
+        times_thrust, thrusts = zip(*deduped)
         thrust_func = interp1d(times_thrust, thrusts, bounds_error=False, fill_value=0.0)
         burn_time = times_thrust[-1]
         return times_thrust, thrusts, thrust_func, burn_time
+
+    def parse_csv_thrust(self, path):
+        data = []
+        with open(path, 'r', newline='') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if not row:
+                    continue
+                # skip commented/header lines starting with a non-numeric token
+                first = row[0].strip()
+                if not first:
+                    continue
+                if first.startswith('#') or first.startswith(';'):
+                    continue
+                try:
+                    t = float(first)
+                    thrust = float(row[1]) if len(row) > 1 else None
+                    if thrust is None:
+                        continue
+                    data.append((t, thrust))
+                except Exception:
+                    # header line like "time,thrust" -> skip
+                    continue
+        # ensure sorted and unique by time (keep last occurrence on duplicates)
+        data.sort(key=lambda x: x[0])
+        deduped = []
+        last_t = None
+        for t, y in data:
+            if last_t is None or t > last_t + 1e-9:
+                deduped.append((t, y))
+                last_t = t
+            else:
+                deduped[-1] = (t, y)
+                last_t = t
+        return deduped
+
+    def parse_rasp_eng_thrust(self, path):
+        """Parse a simple RASP/ENG motor file. We read the first motor block's time/thrust pairs.
+        Lines starting with ';' or '#' are comments. The first non-comment line is header. Following lines until a blank/comment are time thrust pairs."""
+        data = []
+        with open(path, 'r') as f:
+            lines = f.readlines()
+        # strip whitespace
+        lines = [ln.strip() for ln in lines]
+        # skip initial comments
+        i = 0
+        while i < len(lines) and (not lines[i] or lines[i].startswith(';') or lines[i].startswith('#')):
+            i += 1
+        if i >= len(lines):
+            return data
+        # header line (ignored for now)
+        i += 1
+        # read pairs
+        while i < len(lines):
+            ln = lines[i]
+            if not ln or ln.startswith(';') or ln.startswith('#'):
+                # stop at blank/comment -> end of first motor block
+                break
+            parts = ln.split()
+            if len(parts) < 2:
+                break
+            try:
+                t = float(parts[0])
+                thrust = float(parts[1])
+                data.append((t, thrust))
+            except Exception:
+                # stop on parse failure for safety
+                break
+            i += 1
+        data.sort(key=lambda x: x[0])
+        # dedup
+        deduped = []
+        last_t = None
+        for t, y in data:
+            if last_t is None or t > last_t + 1e-9:
+                deduped.append((t, y))
+                last_t = t
+            else:
+                deduped[-1] = (t, y)
+                last_t = t
+        return deduped
 
     def create_telemetry_dashboard(self, layout):
         """Create a professional mission control-style telemetry dashboard"""
@@ -1580,17 +1800,27 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         theme = self.themes[self.current_theme]
         
-        # Create main scoreboard container with dark professional styling
+        # Create main scoreboard container with theme-aware styling
         scoreboard = QtWidgets.QFrame()
-        scoreboard.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                    stop: 0 #1A252F, stop: 1 #0F1419);
-                border: 2px solid #00D4FF;
-                border-radius: 8px;
-                margin: 4px;
-            }}
-        """)
+        if self.current_theme == "retro":
+            scoreboard.setStyleSheet(f"""
+                QFrame {{
+                    background: {theme['colors']['secondary_bg']};
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 8px;
+                    margin: 4px;
+                }}
+            """)
+        else:
+            scoreboard.setStyleSheet(f"""
+                QFrame {{
+                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                        stop: 0 #1A252F, stop: 1 #0F1419);
+                    border: 2px solid {theme['colors']['accent']};
+                    border-radius: 8px;
+                    margin: 4px;
+                }}
+            """)
         
         scoreboard_layout = QtWidgets.QVBoxLayout(scoreboard)
         scoreboard_layout.setContentsMargins(12, 8, 12, 8)
@@ -1613,15 +1843,21 @@ class RocketSimulationUI(QtWidgets.QWidget):
         """)
         scoreboard_layout.addWidget(status_header)
         
-        # Primary metrics in a clean grid
+        # Primary metrics in a grid
         metrics_grid = QtWidgets.QGridLayout()
         metrics_grid.setSpacing(8)
         
-        # Create professional metric displays
-        self.altitude_display = self.create_professional_metric("ALT", "0.0", "m", "#00FF41")
-        self.velocity_display = self.create_professional_metric("VEL", "0.0", "m/s", "#0099FF") 
-        self.acceleration_display = self.create_professional_metric("ACCEL", "0.0", "m/s²", "#FF6B35")
-        self.g_force_display = self.create_professional_metric("G-FORCE", "0.0", "G", "#FF3333")
+        # Create metric displays (theme-aware)
+        if self.current_theme == "retro":
+            self.altitude_display = self.create_retro_gauge("ALT", "0.0", "m", theme['colors']['success'])
+            self.velocity_display = self.create_retro_gauge("VEL", "0.0", "m/s", theme['colors']['info'])
+            self.acceleration_display = self.create_retro_gauge("ACCEL", "0.0", "m/s²", theme['colors']['warning'])
+            self.g_force_display = self.create_retro_gauge("G-FORCE", "0.0", "G", "#FF3333")
+        else:
+            self.altitude_display = self.create_professional_metric("ALT", "0.0", "m", "#00FF41")
+            self.velocity_display = self.create_professional_metric("VEL", "0.0", "m/s", "#0099FF") 
+            self.acceleration_display = self.create_professional_metric("ACCEL", "0.0", "m/s²", "#FF6B35")
+            self.g_force_display = self.create_professional_metric("G-FORCE", "0.0", "G", "#FF3333")
         
         metrics_grid.addWidget(self.altitude_display, 0, 0)
         metrics_grid.addWidget(self.velocity_display, 0, 1)
@@ -1692,6 +1928,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
         status_row.addWidget(self.phase_display)
         status_row.addWidget(self.time_display)
         scoreboard_layout.addLayout(status_row)
+        # Ensure status labels adopt current theme styles
+        self.setup_status_display_styling()
         
         # Add the complete scoreboard to main layout
         layout.addWidget(scoreboard)
@@ -1774,7 +2012,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Create matplotlib figure for force diagram
         self.force_fig = Figure(figsize=(4, 6), dpi=80)
-        self.force_fig.patch.set_facecolor('#2C3E50' if self.current_theme == "professional" else '#F8F5E3')
+        self.force_fig.patch.set_facecolor(self.themes[self.current_theme]["plot_bg"])
         self.force_canvas = FigureCanvas(self.force_fig)
         self.force_canvas.setMinimumSize(200, 300)
         
@@ -3232,11 +3470,11 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Styling with dynamic camera following
         ax.set_xlim(center_x - view_width, center_x + view_width)
         ax.set_ylim(center_y - view_height*0.3, center_y + view_height*0.7)
-        ax.set_title(f'Rocket Launch - T+{t:.1f}s - Alt: {y_pos:.1f}m', fontsize=14, fontweight='bold', color='#3C2F1E')
-        ax.set_xlabel('Drift (m)', color='#3C2F1E')
-        ax.set_ylabel('Altitude (m)', color='#3C2F1E')
-        ax.grid(True, alpha=0.3, color='#BCA16A')
-        ax.set_facecolor('#FDF6E3')
+        ax.set_title(f'Rocket Launch - T+{t:.1f}s - Alt: {y_pos:.1f}m', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Drift (m)')
+        ax.set_ylabel('Altitude (m)')
+        # Theme-aware styling
+        self.style_axes(ax)
         
         # Add status text
         if not stable and y_pos > 0:
@@ -3310,11 +3548,15 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     def select_thrust_curve(self):
         options = QtWidgets.QFileDialog.Options()
+        # Default to the thrust_curves directory in the project if it exists
+        default_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'thrust_curves')
+        if not os.path.isdir(default_dir):
+            default_dir = ''
         fileName, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
-            "Select Thrust Curve CSV",
-            "",
-            "CSV Files (*.csv);;All Files (*)",
+            "Select Thrust Curve",
+            default_dir,
+            "Thrust Curves (*.csv *.eng *.rasp);;CSV Files (*.csv);;RASP/ENG Files (*.eng *.rasp);;All Files (*)",
             options=options
         )
         if fileName:
@@ -3527,19 +3769,15 @@ class RocketSimulationUI(QtWidgets.QWidget):
             return
 
         ax = self.figure.add_subplot(111)
-
-        # Retro pixel-style graph
-        ax.set_facecolor("#FDF6E3")  # lighter beige
-        self.figure.patch.set_facecolor("#F8F5E3")  # main beige
-        ax.grid(color="#BCA16A", linestyle=':', linewidth=1)  # brown accent
-        for spine in ax.spines.values():
-            spine.set_color("#E94F37")  # red border for graph
-            spine.set_linewidth(2)
-        ax.tick_params(axis='both', colors='#3C2F1E', labelsize=10)  # dark brown
+        # Apply theme-aware styling
+        self.style_axes(ax)
 
         times = [r['time'] for r in results]
-        # 8BitDo inspired colors
-        colors = ["#E94F37", "#1C77C3", "#FFD447", "#3C2F1E", "#A7C7E7", "#F8F5E3"]
+        # Pick series colors based on theme
+        if self.current_theme == "retro":
+            series_colors = ["#E94F37", "#1C77C3", "#FFD447", "#3C2F1E", "#A7C7E7", "#A259F7"]
+        else:
+            series_colors = ["#00D4FF", "#00FF41", "#FF6B35", "#ECF0F1", "#FFA500", "#FF69B4"]
         labels = ["Altitude", "Velocity", "Mass", "Acceleration", "Thrust", "Drag"]
         keys = ["altitude", "velocity", "mass", "acceleration", "thrust", "drag"]
         # Plot selected variable(s), but default to altitude for tooltip
@@ -3549,17 +3787,14 @@ class RocketSimulationUI(QtWidgets.QWidget):
         for i, (label, key) in enumerate(zip(labels, keys)):
             if self.graph_vars[label].isChecked():
                 values = [r.get(key, 0) for r in results]
-                if label == 'Drag':
-                    ax.plot(times, values, label=label, color='#A259F7')  # purple
-                else:
-                    ax.plot(times, values, label=label, color=colors[i % len(colors)])
+                ax.plot(times, values, label=label, color=series_colors[i % len(series_colors)])
                 if not plotted:
                     tooltip_label = label
                     tooltip_values = values
                 plotted = True
         if not plotted:
             # Default to altitude if nothing selected
-            ax.plot(times, tooltip_values, label=tooltip_label, color=colors[0])
+            ax.plot(times, tooltip_values, label=tooltip_label, color=series_colors[0])
         ax.set_xlabel('Time (s)')
         ax.set_ylabel('Value')
         ax.legend()
@@ -4002,7 +4237,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-    app.setStyleSheet(retro_style)
+    # Global stylesheet removed; theming is applied per-widget via apply_theme
 
     # Splash screen with GIF animation
     gif_path = os.path.join(os.path.dirname(__file__), 'jarvis.gif')

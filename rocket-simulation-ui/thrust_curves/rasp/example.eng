@@ -1,0 +1,21 @@
+; Example RASP/ENG motor file
+; Comments start with ';' or '#'
+; Fields: name dia len delays prop mass etc (ignored by parser)
+D12 18 70 0 10 50 5 1.0 0.0 0.0 0 ; header line
+; time thrust
+0.00 0
+0.02 5
+0.04 15
+0.06 30
+0.08 60
+0.10 100
+0.12 120
+0.14 115
+0.16 105
+0.18 95
+0.20 80
+0.25 60
+0.30 40
+0.35 25
+0.40 10
+0.45 0
