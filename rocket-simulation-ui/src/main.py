@@ -13,6 +13,7 @@ import traceback
 import csv
 from scipy.interpolate import interp1d
 import matplotlib.patches as mpatches
+from live_code_viewer import LiveCodeViewer  # Import our live code viewer
 
 # === FULL RETRO PIXEL STYLE ===
 # NOTE: Removed use of a global app stylesheet to avoid forcing retro styles over other themes.
@@ -52,6 +53,18 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Load saved theme preference
         self.current_theme = self.load_theme_preference()
+        
+        # Initialize live code viewer (but don't show it yet)
+        self.live_code_viewer = None
+        
+        # Get screen information for better scaling
+        screen = QtWidgets.QApplication.desktop().screenGeometry()
+        self.screen_width = screen.width()
+        self.screen_height = screen.height()
+        self.dpi_scale = QtWidgets.QApplication.desktop().logicalDpiX() / 96.0
+        
+        # Set up scaling dimensions before UI creation
+        self.setup_window_scaling()
         
         # Set window and taskbar icon (use .ico for best Windows compatibility)
         self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), 'JARVIS.ico')))
@@ -965,8 +978,94 @@ class RocketSimulationUI(QtWidgets.QWidget):
         return widget
 
 
+    def setup_window_scaling(self):
+        """Setup responsive window scaling based on screen size and DPI"""
+        # Calculate optimal sizes based on screen resolution
+        if self.screen_width >= 2560:  # 4K or ultrawide
+            self.base_font_size = int(14 * self.dpi_scale)
+            self.input_height = int(35 * self.dpi_scale)
+            self.button_height = int(40 * self.dpi_scale)
+            self.left_panel_width = int(450 * self.dpi_scale)
+        elif self.screen_width >= 1920:  # 1080p
+            self.base_font_size = int(12 * self.dpi_scale)
+            self.input_height = int(30 * self.dpi_scale)
+            self.button_height = int(35 * self.dpi_scale)
+            self.left_panel_width = int(400 * self.dpi_scale)
+        else:  # Lower resolution
+            self.base_font_size = int(10 * self.dpi_scale)
+            self.input_height = int(25 * self.dpi_scale)
+            self.button_height = int(30 * self.dpi_scale)
+            self.left_panel_width = int(350 * self.dpi_scale)
+        
+        # Set minimum window size based on screen
+        min_width = min(1200, int(self.screen_width * 0.8))
+        min_height = min(800, int(self.screen_height * 0.8))
+        self.setMinimumSize(min_width, min_height)
+
+    def get_scaled_font_size(self, base_size):
+        """Get appropriately scaled font size"""
+        return int(base_size * self.dpi_scale)
+
+    def get_scaled_dimension(self, base_dimension):
+        """Get appropriately scaled dimension"""
+        return int(base_dimension * self.dpi_scale)
+
+    def setup_menu_bar(self):
+        """Setup menu bar with presentation features"""
+        # Since QWidget doesn't have a menu bar, we'll create a main window wrapper
+        # For now, let's add a button in the interface instead
+        pass
+
+    def show_live_code_viewer(self):
+        """Show or bring to front the live code viewer window"""
+        print("🔴 Live Code Viewer button clicked!")  # Debug output
+        
+        # Show a message box to confirm button click
+        QtWidgets.QMessageBox.information(self, "Live Code Viewer", "Opening Live Code Viewer window...")
+        
+        if self.live_code_viewer is None:
+            print("Creating new Live Code Viewer...")  # Debug output
+            self.live_code_viewer = LiveCodeViewer(self)
+            
+            # Connect to main app events for better integration
+            self.live_code_viewer.setAttribute(QtCore.Qt.WA_DeleteOnClose, False)
+        
+        print("Positioning and showing window...")  # Debug output
+        
+        # Position the window optimally for presentations
+        screen = QtWidgets.QApplication.desktop().screenGeometry()
+        main_rect = self.geometry()
+        
+        # If there's room to the right, place it there
+        if main_rect.right() + 1000 < screen.width():
+            viewer_x = main_rect.right() + 10
+            viewer_y = main_rect.top()
+        else:
+            # Otherwise, tile vertically
+            viewer_x = main_rect.left()
+            viewer_y = main_rect.bottom() + 10
+        
+        print(f"Positioning at: {viewer_x}, {viewer_y}")  # Debug output
+        
+        self.live_code_viewer.move(viewer_x, viewer_y)
+        self.live_code_viewer.show()
+        self.live_code_viewer.raise_()
+        self.live_code_viewer.activateWindow()
+        
+        print("Window should be visible now")  # Debug output
+        
+        # Update button text to indicate viewer is open
+        self.live_code_button.setText('🟢 Code Viewer Open')
+        
+        # Auto-start demo mode for presentations (disabled for now to avoid issues)
+        # QtCore.QTimer.singleShot(1000, self.live_code_viewer.run_demo)
+
     def init_ui(self):
         self.setWindowTitle('JARVIS')
+        
+        # Add menu bar for presentation features
+        self.setup_menu_bar()
+        
         main_layout = QtWidgets.QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)  # No margins on main window
         main_layout.setSpacing(0)  # No spacing
@@ -978,15 +1077,20 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Left panel: Inputs
         left_widget = QtWidgets.QWidget()
         left_widget.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
-        left_widget.setMaximumWidth(400)  # Increased width to accommodate larger inputs
+        left_widget.setMaximumWidth(self.left_panel_width)  # Use calculated width
         left_layout = QtWidgets.QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(8, 8, 8, 8)  # More comfortable margins
-        left_layout.setSpacing(8)  # Better spacing between elements
+        margins = self.get_scaled_dimension(8)
+        spacing = self.get_scaled_dimension(8)
+        left_layout.setContentsMargins(margins, margins, margins, margins)
+        left_layout.setSpacing(spacing)
 
         form_layout = QtWidgets.QFormLayout()
-        form_layout.setVerticalSpacing(8)  # More comfortable vertical spacing
-        form_layout.setHorizontalSpacing(8)  # Better horizontal spacing
-        form_layout.setContentsMargins(8, 8, 8, 8)  # Some margins for better look
+        v_spacing = self.get_scaled_dimension(8)
+        h_spacing = self.get_scaled_dimension(8)
+        form_margins = self.get_scaled_dimension(8)
+        form_layout.setVerticalSpacing(v_spacing)
+        form_layout.setHorizontalSpacing(h_spacing)
+        form_layout.setContentsMargins(form_margins, form_margins, form_margins, form_margins)
         # Input fields
         self.mass_input = QtWidgets.QLineEdit()
         self.mass_input.setPlaceholderText("e.g., 5.0")
@@ -1040,27 +1144,33 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.chute_size_unit = QtWidgets.QComboBox(); self.chute_size_unit.addItems(["m²", "ft²"])
         chute_size_row = QtWidgets.QHBoxLayout(); chute_size_row.addWidget(self.chute_size_input); chute_size_row.addWidget(self.chute_size_unit)
 
-        # Set size policies and styling for better spacing
-        input_style = """
-            QLineEdit {
-                padding: 8px 12px;
-                font-size: 14px;
+        # Set size policies and styling for better scaling
+        padding_v = self.get_scaled_dimension(8)
+        padding_h = self.get_scaled_dimension(12)
+        font_size = self.get_scaled_font_size(14)
+        min_height = self.input_height
+        border_radius = self.get_scaled_dimension(6)
+        
+        input_style = f"""
+            QLineEdit {{
+                padding: {padding_v}px {padding_h}px;
+                font-size: {font_size}px;
                 font-family: 'Arial', sans-serif;
                 border: 2px solid #BCA16A;
-                border-radius: 6px;
+                border-radius: {border_radius}px;
                 background-color: #FDF6E3;
                 color: #3C2F1E;
-                min-height: 32px;
-                min-width: 120px;
-            }
-            QLineEdit:focus {
+                min-height: {min_height}px;
+                min-width: {self.get_scaled_dimension(120)}px;
+            }}
+            QLineEdit:focus {{
                 border: 2px solid #E94F37;
                 background-color: #FFFFFF;
-            }
-            QLineEdit:hover {
+            }}
+            QLineEdit:hover {{
                 border: 2px solid #E94F37;
                 background-color: #FFFFFF;
-            }
+            }}
         """
         
         for widget in [self.mass_input, self.cd_input, self.area_input, self.rho_input,
@@ -1071,36 +1181,36 @@ class RocketSimulationUI(QtWidgets.QWidget):
             widget.setStyleSheet(input_style)
             
         # Style combo boxes to match
-        combo_style = """
-            QComboBox {
-                padding: 8px 12px;
-                font-size: 14px;
+        combo_style = f"""
+            QComboBox {{
+                padding: {padding_v}px {padding_h}px;
+                font-size: {font_size}px;
                 font-family: 'Arial', sans-serif;
                 border: 2px solid #BCA16A;
-                border-radius: 6px;
+                border-radius: {border_radius}px;
                 background-color: #FDF6E3;
                 color: #3C2F1E;
-                min-height: 32px;
-                min-width: 80px;
-            }
-            QComboBox:focus {
+                min-height: {min_height}px;
+                min-width: {self.get_scaled_dimension(80)}px;
+            }}
+            QComboBox:focus {{
                 border: 2px solid #E94F37;
                 background-color: #FFFFFF;
-            }
-            QComboBox:hover {
+            }}
+            QComboBox:hover {{
                 border: 2px solid #E94F37;
                 background-color: #FFFFFF;
-            }
-            QComboBox::drop-down {
+            }}
+            QComboBox::drop-down {{
                 border: none;
-                width: 20px;
-            }
-            QComboBox::down-arrow {
+                width: {self.get_scaled_dimension(20)}px;
+            }}
+            QComboBox::down-arrow {{
+                color: #3C2F1E;
                 image: none;
                 border: none;
-                color: #3C2F1E;
-                font-size: 12px;
-            }
+                font-size: {self.get_scaled_font_size(12)}px;
+            }}
         """
         
         for combo in [self.mass_unit, self.area_unit, self.rho_unit, self.timestep_unit,
@@ -1175,6 +1285,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.start_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.start_button.clicked.connect(self.start_simulation)
         left_layout.addWidget(self.start_button)
+
+        # Live Code Viewer button for presentations
+        self.live_code_button = QtWidgets.QPushButton('🔴 Live Code Viewer')
+        self.live_code_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.live_code_button.setToolTip('Show live code execution for presentations')
+        self.live_code_button.clicked.connect(self.show_live_code_viewer)
+        left_layout.addWidget(self.live_code_button)
 
         # Az/5 kill button
         self.kill_button = QtWidgets.QPushButton('Az/5')
