@@ -479,16 +479,15 @@ class RocketSimulationUI(QtWidgets.QWidget):
         """
         self.setStyleSheet(professional_style)
 
-    def on_theme_changed(self):
-        """Handle theme selection change"""
-        selected_theme = self.theme_select.currentData()
-        if selected_theme and selected_theme != self.current_theme:
-            self.apply_theme(selected_theme)
-            self.update_theme_preview()
+
 
     def update_theme_preview(self):
         """Update the theme preview display"""
         if not hasattr(self, 'theme_preview'):
+            return
+        
+        # Ensure we have a valid theme
+        if self.current_theme not in self.themes:
             return
             
         theme = self.themes[self.current_theme]
@@ -611,6 +610,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     def setup_telemetry_header(self):
         """Apply theme-aware styling to telemetry header"""
+        if not hasattr(self, 'telemetry_header') or self.telemetry_header is None:
+            return
+            
         theme = self.themes[self.current_theme]
         if self.current_theme == "retro":
             self.telemetry_header.setText("")  # Remove header text
@@ -618,8 +620,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
         else:
             self.telemetry_header.setText("")  # Remove header text
             style = "QLabel { background: transparent; margin: 0px; padding: 0px; }"
-        self.telemetry_header.setStyleSheet(style)
-        self.telemetry_header.setMaximumHeight(0)  # Hide completely
+        
+        try:
+            self.telemetry_header.setStyleSheet(style)
+            self.telemetry_header.setMaximumHeight(0)  # Hide completely
+        except RuntimeError:
+            # Widget has been deleted, skip styling
+            pass
 
     def setup_force_widget_styling(self):
         """Setup theme-aware styling for force widget"""
@@ -646,6 +653,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     def setup_force_header(self):
         """Setup theme-aware force diagram header"""
+        if not hasattr(self, 'force_header') or self.force_header is None:
+            return
+            
         theme = self.themes[self.current_theme]
         if self.current_theme == "retro":
             self.force_header.setText("")  # Remove header text
@@ -653,8 +663,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
         else:
             self.force_header.setText("")  # Remove header text
             style = "QLabel { background: transparent; margin: 0px; padding: 0px; }"
-        self.force_header.setStyleSheet(style)
-        self.force_header.setMaximumHeight(0)  # Hide completely
+        
+        try:
+            self.force_header.setStyleSheet(style)
+            self.force_header.setMaximumHeight(0)  # Hide completely
+        except RuntimeError:
+            # Widget has been deleted, skip styling
+            pass
 
     def setup_trajectory_widget_styling(self):
         """Apply theme-aware styling to trajectory widget"""
@@ -839,8 +854,14 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 }}
             """
         
-        self.phase_display.setStyleSheet(phase_style)
-        self.time_display.setStyleSheet(time_style)
+        try:
+            if hasattr(self, 'phase_display') and self.phase_display is not None:
+                self.phase_display.setStyleSheet(phase_style)
+            if hasattr(self, 'time_display') and self.time_display is not None:
+                self.time_display.setStyleSheet(time_style)
+        except RuntimeError:
+            # Widgets have been deleted, skip styling
+            pass
 
     def create_retro_gauge(self, label, value, unit, color):
         """Create a retro-themed gauge display"""
@@ -957,74 +978,136 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Left panel: Inputs
         left_widget = QtWidgets.QWidget()
         left_widget.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
-        left_widget.setMaximumWidth(320)  # Limit left panel width
+        left_widget.setMaximumWidth(400)  # Increased width to accommodate larger inputs
         left_layout = QtWidgets.QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(4, 4, 4, 4)  # Minimal margins
-        left_layout.setSpacing(4)  # Tight spacing
+        left_layout.setContentsMargins(8, 8, 8, 8)  # More comfortable margins
+        left_layout.setSpacing(8)  # Better spacing between elements
 
         form_layout = QtWidgets.QFormLayout()
-        form_layout.setVerticalSpacing(2)  # Tight vertical spacing
-        form_layout.setHorizontalSpacing(4)  # Minimal horizontal spacing
-        form_layout.setContentsMargins(0, 0, 0, 0)  # No margins
+        form_layout.setVerticalSpacing(8)  # More comfortable vertical spacing
+        form_layout.setHorizontalSpacing(8)  # Better horizontal spacing
+        form_layout.setContentsMargins(8, 8, 8, 8)  # Some margins for better look
         # Input fields
         self.mass_input = QtWidgets.QLineEdit()
+        self.mass_input.setPlaceholderText("e.g., 5.0")
         self.mass_unit = QtWidgets.QComboBox(); self.mass_unit.addItems(["kg", "g", "lb"])
         mass_row = QtWidgets.QHBoxLayout(); mass_row.addWidget(self.mass_input); mass_row.addWidget(self.mass_unit)
 
         self.cd_input = QtWidgets.QLineEdit()
+        self.cd_input.setPlaceholderText("e.g., 0.7")
 
         self.area_input = QtWidgets.QLineEdit()
+        self.area_input.setPlaceholderText("e.g., 0.0045")
         self.area_unit = QtWidgets.QComboBox(); self.area_unit.addItems(["m²", "cm²", "ft²"])
         area_row = QtWidgets.QHBoxLayout(); area_row.addWidget(self.area_input); area_row.addWidget(self.area_unit)
 
         self.rho_input = QtWidgets.QLineEdit()
+        self.rho_input.setPlaceholderText("e.g., 1.225")
         self.rho_unit = QtWidgets.QComboBox(); self.rho_unit.addItems(["kg/m³", "g/cm³", "lb/ft³"])
         rho_row = QtWidgets.QHBoxLayout(); rho_row.addWidget(self.rho_input); rho_row.addWidget(self.rho_unit)
 
         self.timestep_input = QtWidgets.QLineEdit()
-        self.timestep_input.setPlaceholderText("Time Step")
+        self.timestep_input.setPlaceholderText("e.g., 0.1")
         self.timestep_input.setText("0.1")
         self.timestep_unit = QtWidgets.QComboBox(); self.timestep_unit.addItems(["s", "ms"])
         timestep_row = QtWidgets.QHBoxLayout(); timestep_row.addWidget(self.timestep_input); timestep_row.addWidget(self.timestep_unit)
 
         self.fin_count_input = QtWidgets.QLineEdit()
+        self.fin_count_input.setPlaceholderText("e.g., 3")
+        
         self.fin_thickness_input = QtWidgets.QLineEdit()
+        self.fin_thickness_input.setPlaceholderText("e.g., 0.003")
         self.fin_thickness_unit = QtWidgets.QComboBox(); self.fin_thickness_unit.addItems(["m", "mm", "in"])
         fin_thickness_row = QtWidgets.QHBoxLayout(); fin_thickness_row.addWidget(self.fin_thickness_input); fin_thickness_row.addWidget(self.fin_thickness_unit)
 
         self.fin_length_input = QtWidgets.QLineEdit()
+        self.fin_length_input.setPlaceholderText("e.g., 0.1")
         self.fin_length_unit = QtWidgets.QComboBox(); self.fin_length_unit.addItems(["m", "mm", "in"])
         fin_length_row = QtWidgets.QHBoxLayout(); fin_length_row.addWidget(self.fin_length_input); fin_length_row.addWidget(self.fin_length_unit)
 
         self.body_diameter_input = QtWidgets.QLineEdit()
+        self.body_diameter_input.setPlaceholderText("e.g., 0.06")
         self.body_diameter_unit = QtWidgets.QComboBox(); self.body_diameter_unit.addItems(["m", "mm", "in"])
         body_diameter_row = QtWidgets.QHBoxLayout(); body_diameter_row.addWidget(self.body_diameter_input); body_diameter_row.addWidget(self.body_diameter_unit)
 
         self.chute_height_input = QtWidgets.QLineEdit()
+        self.chute_height_input.setPlaceholderText("e.g., 500")
         self.chute_height_unit = QtWidgets.QComboBox(); self.chute_height_unit.addItems(["m", "ft"])
         chute_height_row = QtWidgets.QHBoxLayout(); chute_height_row.addWidget(self.chute_height_input); chute_height_row.addWidget(self.chute_height_unit)
 
         self.chute_size_input = QtWidgets.QLineEdit()
+        self.chute_size_input.setPlaceholderText("e.g., 0.5")
         self.chute_size_unit = QtWidgets.QComboBox(); self.chute_size_unit.addItems(["m²", "ft²"])
         chute_size_row = QtWidgets.QHBoxLayout(); chute_size_row.addWidget(self.chute_size_input); chute_size_row.addWidget(self.chute_size_unit)
 
         # Set size policies and styling for better spacing
         input_style = """
             QLineEdit {
-                padding: 6px 8px;
-                font-size: 11px;
-                border: 1px solid #BCA16A;
-                border-radius: 4px;
+                padding: 8px 12px;
+                font-size: 14px;
+                font-family: 'Arial', sans-serif;
+                border: 2px solid #BCA16A;
+                border-radius: 6px;
                 background-color: #FDF6E3;
                 color: #3C2F1E;
-                min-height: 20px;
+                min-height: 32px;
+                min-width: 120px;
             }
             QLineEdit:focus {
                 border: 2px solid #E94F37;
                 background-color: #FFFFFF;
             }
+            QLineEdit:hover {
+                border: 2px solid #E94F37;
+                background-color: #FFFFFF;
+            }
         """
         
+        for widget in [self.mass_input, self.cd_input, self.area_input, self.rho_input,
+                   self.timestep_input,
+                   self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
+                   self.chute_height_input, self.chute_size_input]:
+            widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+            widget.setStyleSheet(input_style)
+            
+        # Style combo boxes to match
+        combo_style = """
+            QComboBox {
+                padding: 8px 12px;
+                font-size: 14px;
+                font-family: 'Arial', sans-serif;
+                border: 2px solid #BCA16A;
+                border-radius: 6px;
+                background-color: #FDF6E3;
+                color: #3C2F1E;
+                min-height: 32px;
+                min-width: 80px;
+            }
+            QComboBox:focus {
+                border: 2px solid #E94F37;
+                background-color: #FFFFFF;
+            }
+            QComboBox:hover {
+                border: 2px solid #E94F37;
+                background-color: #FFFFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border: none;
+                color: #3C2F1E;
+                font-size: 12px;
+            }
+        """
+        
+        for combo in [self.mass_unit, self.area_unit, self.rho_unit, self.timestep_unit,
+                     self.fin_thickness_unit, self.fin_length_unit, self.body_diameter_unit,
+                     self.chute_height_unit, self.chute_size_unit]:
+            combo.setStyleSheet(combo_style)
+            
         for widget in [self.mass_input, self.cd_input, self.area_input, self.rho_input,
                    self.timestep_input,
                    self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
@@ -1046,9 +1129,10 @@ class RocketSimulationUI(QtWidgets.QWidget):
         form_layout.addRow("Parachute Size:", chute_size_row)
         # New row for parachute drag coefficient
         self.chute_cd_input = QtWidgets.QLineEdit()
-        self.chute_cd_input.setPlaceholderText("Parachute Cd")
+        self.chute_cd_input.setPlaceholderText("e.g., 1.5")
         self.chute_cd_input.setText("1.5")
         self.chute_cd_input.setStyleSheet(input_style)  # Apply same styling
+        self.chute_cd_input.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         form_layout.addRow("Parachute Drag Coefficient (Cd):", self.chute_cd_input)
 
         left_layout.addLayout(form_layout)
@@ -1109,10 +1193,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 background-color: #FDF6E3;
                 border: 2px solid #E94F37;
                 border-radius: 10px;
-                padding: 10px;
+                padding: 15px;
                 color: #3C2F1E;
-                font-family: 'Press Start 2P', monospace;
-                font-size: 13px;
+                font-family: 'Arial', sans-serif;
+                font-size: 12px;
+                line-height: 1.4;
+                min-height: 120px;
             }
         ''')
         left_layout.addWidget(self.result_label)
@@ -3022,17 +3108,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     def on_theme_changed(self, theme_name):
         """Handle theme selection change"""
-        if theme_name != self.current_theme:
+        if theme_name and theme_name in self.themes and theme_name != self.current_theme:
             self.current_theme = theme_name
             self.apply_theme(theme_name)
+            self.update_theme_preview()
             
             # Save theme preference
-            try:
-                settings = self.load_settings()
-                settings['theme'] = theme_name
-                self.save_settings(settings)
-            except:
-                pass
+            self.save_theme_preference()
 
     def toggle_fbd_animation(self):
         if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
