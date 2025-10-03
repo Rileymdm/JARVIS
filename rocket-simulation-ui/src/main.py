@@ -13,6 +13,7 @@ import traceback
 import csv
 from scipy.interpolate import interp1d
 import matplotlib.patches as mpatches
+from live_code_viewer import LiveCodeViewer  # Import our live code viewer
 
 # === FULL RETRO PIXEL STYLE ===
 # NOTE: Removed use of a global app stylesheet to avoid forcing retro styles over other themes.
@@ -52,6 +53,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Load saved theme preference
         self.current_theme = self.load_theme_preference()
+        
+        # Initialize live code viewer (but don't show it yet)
+        self.live_code_viewer = None
         
         # Set window and taskbar icon (use .ico for best Windows compatibility)
         self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), 'JARVIS.ico')))
@@ -965,8 +969,62 @@ class RocketSimulationUI(QtWidgets.QWidget):
         return widget
 
 
+    def setup_menu_bar(self):
+        """Setup menu bar with presentation features"""
+        # Since QWidget doesn't have a menu bar, we'll create a main window wrapper
+        # For now, let's add a button in the interface instead
+        pass
+
+    def show_live_code_viewer(self):
+        """Show or bring to front the live code viewer window"""
+        print("🔴 Live Code Viewer button clicked!")  # Debug output
+        
+        # Show a message box to confirm button click
+        QtWidgets.QMessageBox.information(self, "Live Code Viewer", "Opening Live Code Viewer window...")
+        
+        if self.live_code_viewer is None:
+            print("Creating new Live Code Viewer...")  # Debug output
+            self.live_code_viewer = LiveCodeViewer(self)
+            
+            # Connect to main app events for better integration
+            self.live_code_viewer.setAttribute(QtCore.Qt.WA_DeleteOnClose, False)
+        
+        print("Positioning and showing window...")  # Debug output
+        
+        # Position the window optimally for presentations
+        screen = QtWidgets.QApplication.desktop().screenGeometry()
+        main_rect = self.geometry()
+        
+        # If there's room to the right, place it there
+        if main_rect.right() + 1000 < screen.width():
+            viewer_x = main_rect.right() + 10
+            viewer_y = main_rect.top()
+        else:
+            # Otherwise, tile vertically
+            viewer_x = main_rect.left()
+            viewer_y = main_rect.bottom() + 10
+        
+        print(f"Positioning at: {viewer_x}, {viewer_y}")  # Debug output
+        
+        self.live_code_viewer.move(viewer_x, viewer_y)
+        self.live_code_viewer.show()
+        self.live_code_viewer.raise_()
+        self.live_code_viewer.activateWindow()
+        
+        print("Window should be visible now")  # Debug output
+        
+        # Update button text to indicate viewer is open
+        self.live_code_button.setText('🟢 Code Viewer Open')
+        
+        # Auto-start demo mode for presentations (disabled for now to avoid issues)
+        # QtCore.QTimer.singleShot(1000, self.live_code_viewer.run_demo)
+
     def init_ui(self):
         self.setWindowTitle('JARVIS')
+        
+        # Add menu bar for presentation features
+        self.setup_menu_bar()
+        
         main_layout = QtWidgets.QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)  # No margins on main window
         main_layout.setSpacing(0)  # No spacing
@@ -1137,32 +1195,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
         left_layout.addLayout(form_layout)
 
-        # Thematic progress bar for flight phase
-        self.phase_progress = QtWidgets.QProgressBar()
-        self.phase_progress.setMinimum(0)
-        self.phase_progress.setMaximum(100)
-        self.phase_progress.setValue(0)
-        self.phase_progress.setTextVisible(True)
-        self.phase_progress.setAlignment(QtCore.Qt.AlignCenter)
-        # Retro style: background beige, chunk red, text inverse (beige on red)
-        self.phase_progress.setStyleSheet('''
-            QProgressBar {
-                background-color: #FDF6E3;
-                border: 2px solid #BCA16A;
-                border-radius: 8px;
-                height: 24px;
-                color: #3C2F1E;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QProgressBar::chunk {
-                background-color: #E94F37;
-                color: #FDF6E3;
-                font-weight: bold;
-                font-size: 14px;
-            }
-        ''')
-        left_layout.addWidget(self.phase_progress)
+        # (Scoreboard progress bar removed per user request)
 
         # Buttons
         self.thrust_curve_path = None
@@ -1176,12 +1209,14 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.start_button.clicked.connect(self.start_simulation)
         left_layout.addWidget(self.start_button)
 
-        # Az/5 kill button
-        self.kill_button = QtWidgets.QPushButton('Az/5')
-        self.kill_button.setStyleSheet('background-color: #E94F37; color: #F8F5E3; font-weight: bold; border-radius: 6px;')
-        self.kill_button.setToolTip('Emergency stop: immediately exit the program')
-        self.kill_button.clicked.connect(QtWidgets.QApplication.quit)
-        left_layout.addWidget(self.kill_button)
+        # Live Code Viewer button for presentations
+        self.live_code_button = QtWidgets.QPushButton('🔴 Live Code Viewer')
+        self.live_code_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.live_code_button.setToolTip('Show live code execution for presentations')
+        self.live_code_button.clicked.connect(self.show_live_code_viewer)
+        left_layout.addWidget(self.live_code_button)
+
+    # Removed Az/5 kill button per user request
 
         # Results label
         self.result_label = QtWidgets.QLabel('Results will be displayed here.')
@@ -1243,24 +1278,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
         right_layout.addWidget(self.graph_tab_widget)
 
-        # --- Animation Controls ---
-        anim_controls_layout = QtWidgets.QHBoxLayout()
-        self.anim_pause_button = QtWidgets.QPushButton('Pause')
-        self.anim_pause_button.setCheckable(True)
-        self.anim_pause_button.setChecked(False)
-        self.anim_pause_button.clicked.connect(self.toggle_fbd_animation)
-        anim_controls_layout.addWidget(self.anim_pause_button)
-
-        anim_controls_layout.addWidget(QtWidgets.QLabel('Speed:'))
-        self.anim_speed_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.anim_speed_slider.setMinimum(1)
-        self.anim_speed_slider.setMaximum(100)
-        self.anim_speed_slider.setValue(30)  # Default to 30ms per frame
-        self.anim_speed_slider.setTickInterval(10)
-        self.anim_speed_slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
-        self.anim_speed_slider.valueChanged.connect(self.set_fbd_anim_speed)
-        anim_controls_layout.addWidget(self.anim_speed_slider)
-        right_layout.addLayout(anim_controls_layout)
+    # Removed animation controls (pause/speed) per user request; Simulation tab now pure graph display.
 
         right_widget.setLayout(right_layout)
 
@@ -1434,78 +1452,57 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Initialize recommendation display
         QtCore.QTimer.singleShot(0, self.update_recommended_launch_angle_label)
 
-        launch_anim_layout.addWidget(stability_group)
+        # New layout: left half trajectory visualizer, right half split vertically
+        main_launch_split = QtWidgets.QHBoxLayout()
 
-        # Create horizontal layout for trajectory and telemetry
-        trajectory_telemetry_layout = QtWidgets.QHBoxLayout()
-        
-        # Rocket launch animation canvas (left side)
+        # --- Left: Trajectory / Launch Visualizer (takes ~50% width, full height) ---
         trajectory_widget = QtWidgets.QWidget()
-        self.trajectory_widget = trajectory_widget  # Store reference for theme updates
+        self.trajectory_widget = trajectory_widget
         self.setup_trajectory_widget_styling()
-        
-        trajectory_layout = QtWidgets.QVBoxLayout(trajectory_widget)
-        trajectory_layout.setContentsMargins(16, 16, 16, 16)
-        trajectory_layout.setSpacing(12)
-        
-        # Professional header for trajectory
+        traj_layout = QtWidgets.QVBoxLayout(trajectory_widget)
+        traj_layout.setContentsMargins(16, 16, 16, 16)
+        traj_layout.setSpacing(12)
         traj_header = QtWidgets.QLabel()
-        self.trajectory_header = traj_header  # Store reference for theme updates
+        self.trajectory_header = traj_header
         self.setup_trajectory_header()
-        trajectory_layout.addWidget(traj_header)
-        
+        traj_layout.addWidget(traj_header)
         self.launch_fig = plt.Figure(figsize=(6, 5))
         self.setup_plot_background()
         self.launch_canvas = FigureCanvas(self.launch_fig)
         self.launch_canvas.setMinimumSize(300, 250)
         self.setup_canvas_styling()
-        trajectory_layout.addWidget(self.launch_canvas)
-        trajectory_telemetry_layout.addWidget(trajectory_widget)
+        traj_layout.addWidget(self.launch_canvas, 1)
+        main_launch_split.addWidget(trajectory_widget, 1)
 
-        # Real-time Telemetry Dashboard (right side)
-        telemetry_widget = QtWidgets.QWidget()
-        self.telemetry_widget = telemetry_widget  # Store reference for theme updates
-        self.setup_telemetry_widget_styling()
-        
-        telemetry_layout = QtWidgets.QVBoxLayout(telemetry_widget)
-        telemetry_layout.setContentsMargins(8, 8, 8, 8)
-        telemetry_layout.setSpacing(6)
-        
-        # Professional header with theme-aware styling
-        header_label = QtWidgets.QLabel()
-        self.telemetry_header = header_label  # Store reference for theme updates
-        self.setup_telemetry_header()
-        telemetry_layout.addWidget(header_label)
-        
-        # Create telemetry display panels
-        self.create_telemetry_dashboard(telemetry_layout)
-        trajectory_telemetry_layout.addWidget(telemetry_widget)
-        
-        # Force Diagram Widget (third panel)
+        # --- Right: Top controls (wind + stability) and bottom Force Diagram ---
+        right_panel = QtWidgets.QWidget()
+        right_panel_layout = QtWidgets.QVBoxLayout(right_panel)
+        right_panel_layout.setContentsMargins(8, 8, 8, 8)
+        right_panel_layout.setSpacing(10)
+
+        controls_container = QtWidgets.QWidget()
+        controls_layout = QtWidgets.QVBoxLayout(controls_container)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(8)
+        controls_layout.addWidget(stability_group)
+        controls_layout.insertWidget(0, wind_group)
+        right_panel_layout.addWidget(controls_container, 1)
+
         force_widget = QtWidgets.QWidget()
-        self.force_widget = force_widget  # Store reference for theme updates
+        self.force_widget = force_widget
         self.setup_force_widget_styling()
-        
         force_layout = QtWidgets.QVBoxLayout(force_widget)
         force_layout.setContentsMargins(8, 8, 8, 8)
         force_layout.setSpacing(6)
-        
-        # Force diagram header
         force_header = QtWidgets.QLabel()
         self.force_header = force_header
         self.setup_force_header()
         force_layout.addWidget(force_header)
-        
-        # Create force diagram display
         self.create_force_diagram(force_layout)
-        trajectory_telemetry_layout.addWidget(force_widget)
-        
-        # Set size ratios (trajectory:telemetry:forces = 2:1:1)
-        trajectory_telemetry_layout.setStretchFactor(trajectory_widget, 2)
-        trajectory_telemetry_layout.setStretchFactor(telemetry_widget, 1)
-        trajectory_telemetry_layout.setStretchFactor(force_widget, 1)
-        
-        launch_anim_layout.addLayout(trajectory_telemetry_layout)
+        right_panel_layout.addWidget(force_widget, 2)
+
+        main_launch_split.addWidget(right_panel, 1)
+        launch_anim_layout.addLayout(main_launch_split, 1)
 
         # Retro styled Launch/Stop buttons
         buttons_row = QtWidgets.QHBoxLayout()
@@ -1705,13 +1702,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.fin_thickness_input.textChanged.connect(self.update_area)
         self.fin_thickness_unit.currentIndexChanged.connect(self.update_area)
 
-        # Dropdown for graph selection
-        self.graph_select = QtWidgets.QComboBox()
-        self.graph_select.addItems(["Altitude", "Velocity", "Mass", "Acceleration", "Thrust", "Drag"])
-        self.graph_select.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        left_layout.addWidget(QtWidgets.QLabel("Select variable to graph:"))
-        left_layout.addWidget(self.graph_select)
-        self.graph_select.currentIndexChanged.connect(self.update_graph)
+    # Removed redundant single-variable graph selection dropdown per user request.
 
         # Multi-variable graphing checkboxes
         self.graph_vars = {
@@ -1886,150 +1877,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         theme = self.themes[self.current_theme]
         
-        # Create main scoreboard container with theme-aware styling
-        scoreboard = QtWidgets.QFrame()
-        if self.current_theme == "retro":
-            scoreboard.setStyleSheet(f"""
-                QFrame {{
-                    background: {theme['colors']['secondary_bg']};
-                    border: 2px solid {theme['colors']['accent']};
-                    border-radius: 8px;
-                    margin: 4px;
-                }}
-            """)
-        else:
-            scoreboard.setStyleSheet(f"""
-                QFrame {{
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                        stop: 0 #1A252F, stop: 1 #0F1419);
-                    border: 2px solid {theme['colors']['accent']};
-                    border-radius: 8px;
-                    margin: 4px;
-                }}
-            """)
-        
-        scoreboard_layout = QtWidgets.QVBoxLayout(scoreboard)
-        scoreboard_layout.setContentsMargins(12, 8, 12, 8)
-        scoreboard_layout.setSpacing(6)
-        
-        # Mission status header
-        status_header = QtWidgets.QLabel("MISSION TELEMETRY")
-        status_header.setAlignment(QtCore.Qt.AlignCenter)
-        status_header.setStyleSheet("""
-            QLabel {
-                color: #00D4FF;
-                font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 12px;
-                font-weight: bold;
-                letter-spacing: 2px;
-                padding: 4px 0px;
-                border-bottom: 1px solid #00D4FF;
-                margin-bottom: 8px;
-            }
-        """)
-        scoreboard_layout.addWidget(status_header)
-        
-        # Primary metrics in a grid
-        metrics_grid = QtWidgets.QGridLayout()
-        metrics_grid.setSpacing(8)
-        
-        # Create metric displays (theme-aware)
-        if self.current_theme == "retro":
-            self.altitude_display = self.create_retro_gauge("ALT", "0.0", "m", theme['colors']['success'])
-            self.velocity_display = self.create_retro_gauge("VEL", "0.0", "m/s", theme['colors']['info'])
-            self.acceleration_display = self.create_retro_gauge("ACCEL", "0.0", "m/s²", theme['colors']['warning'])
-            self.g_force_display = self.create_retro_gauge("G-FORCE", "0.0", "G", "#FF3333")
-        else:
-            self.altitude_display = self.create_professional_metric("ALT", "0.0", "m", "#00FF41")
-            self.velocity_display = self.create_professional_metric("VEL", "0.0", "m/s", "#0099FF") 
-            self.acceleration_display = self.create_professional_metric("ACCEL", "0.0", "m/s²", "#FF6B35")
-            self.g_force_display = self.create_professional_metric("G-FORCE", "0.0", "G", "#FF3333")
-        
-        metrics_grid.addWidget(self.altitude_display, 0, 0)
-        metrics_grid.addWidget(self.velocity_display, 0, 1)
-        metrics_grid.addWidget(self.acceleration_display, 1, 0)
-        metrics_grid.addWidget(self.g_force_display, 1, 1)
-        
-        scoreboard_layout.addLayout(metrics_grid)
-        
-        # Secondary metrics row
-        secondary_grid = QtWidgets.QGridLayout()
-        secondary_grid.setSpacing(8)
-        
-        if self.current_theme == "retro":
-            self.thrust_display = self.create_retro_gauge("THRUST", "0.0", "N", theme['colors']['success'])
-            self.mass_display = self.create_retro_gauge("MASS", "0.0", "kg", theme['colors']['primary_text']) 
-            self.drag_display = self.create_retro_gauge("DRAG", "0.0", "N", theme['colors']['warning'])
-            self.mach_display = self.create_retro_gauge("MACH", "0.0", "", "#FF4500")
-        else:
-            self.thrust_display = self.create_professional_metric("THRUST", "0.0", "N", "#32CD32")
-            self.mass_display = self.create_professional_metric("MASS", "0.0", "kg", "#FFFFFF")
-            self.drag_display = self.create_professional_metric("DRAG", "0.0", "N", "#FFA500") 
-            self.mach_display = self.create_professional_metric("MACH", "0.0", "", "#FF69B4")
-        
-        secondary_grid.addWidget(self.thrust_display, 0, 0)
-        secondary_grid.addWidget(self.mass_display, 0, 1)
-        secondary_grid.addWidget(self.drag_display, 1, 0)
-        secondary_grid.addWidget(self.mach_display, 1, 1)
-        
-        scoreboard_layout.addLayout(secondary_grid)
-        
-        # Mission status indicators at bottom
-        status_row = QtWidgets.QHBoxLayout()
-        
-        # Flight phase display
-        self.phase_display = QtWidgets.QLabel("STANDBY")
-        self.phase_display.setAlignment(QtCore.Qt.AlignCenter)
-        self.phase_display.setStyleSheet("""
-            QLabel {
-                background: rgba(0, 212, 255, 0.1);
-                color: #00D4FF;
-                font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 4px 8px;
-                border: 1px solid #00D4FF;
-                border-radius: 4px;
-                letter-spacing: 1px;
-            }
-        """)
-        
-        # Mission time display
-        self.time_display = QtWidgets.QLabel("T+ 000.0")
-        self.time_display.setAlignment(QtCore.Qt.AlignCenter)
-        self.time_display.setStyleSheet("""
-            QLabel {
-                background: rgba(0, 255, 65, 0.1);
-                color: #00FF41;
-                font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 4px 8px;
-                border: 1px solid #00FF41;
-                border-radius: 4px;
-                letter-spacing: 1px;
-            }
-        """)
-        
-        status_row.addWidget(self.phase_display)
-        status_row.addWidget(self.time_display)
-        scoreboard_layout.addLayout(status_row)
-        # Ensure status labels adopt current theme styles
-        self.setup_status_display_styling()
-        
-        # Add the complete scoreboard to main layout
-        layout.addWidget(scoreboard)
-        
-        # Status indicators for various systems
-        indicators_layout = QtWidgets.QHBoxLayout()
-        
-        if self.current_theme == "retro":
-            self.stable_status = self.create_retro_indicator("STABLE", "⚖️")
-        else:
-            self.stable_status = self.create_professional_indicator("STABLE")
-        
-        indicators_layout.addWidget(self.stable_status)
-        layout.addLayout(indicators_layout)
+        # Removed scoreboard (telemetry metrics, phase/time, indicators) per user request; retaining only core graph functionality.
         
         # Initialize telemetry update timer
         self.telemetry_timer = QtCore.QTimer()
@@ -2787,107 +2635,17 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 else:
                     phase = "LIFTOFF"
                 
-                # Update displays with theme-appropriate formatting
-                if self.current_theme == "retro":
-                    self.altitude_display.value_label.setText(f"{altitude:.1f} m")
-                    self.velocity_display.value_label.setText(f"{velocity:.1f} m/s")
-                    self.acceleration_display.value_label.setText(f"{acceleration:.1f} m/s²")
-                    self.g_force_display.value_label.setText(f"{g_force:.1f} G")
-                    self.thrust_display.value_label.setText(f"{current_thrust:.0f} N")
-                    self.drag_display.value_label.setText(f"{drag_force:.1f} N")
-                    self.mass_display.value_label.setText(f"{mass:.2f} kg")
-                    self.mach_display.value_label.setText(f"{mach_number:.2f}")
-                    self.time_display.setText(f"T+ {time:.1f}s")
-                else:
-                    self.altitude_display.value_label.setText(f"{altitude:.1f} m")
-                    self.velocity_display.value_label.setText(f"{velocity:.1f} m/s")
-                    self.acceleration_display.value_label.setText(f"{acceleration:.1f} m/s²")
-                    self.g_force_display.value_label.setText(f"{g_force:.1f} G")
-                    self.thrust_display.value_label.setText(f"{current_thrust:.0f} N")
-                    self.drag_display.value_label.setText(f"{drag_force:.1f} N")
-                    self.mass_display.value_label.setText(f"{mass:.2f} kg")
-                    self.mach_display.value_label.setText(f"{mach_number:.2f}")
-                    self.time_display.setText(f"T+ {time:06.1f}")
+                # Telemetry scoreboard removed: suppress metric display updates
                 
-                self.phase_display.setText(phase)
-                
-                # Update status indicators based on theme
-                if self.current_theme == "retro":
-                    if hasattr(self, 'engine_status'):
-                        self.update_retro_indicator(self.engine_status, current_thrust > 10)
-                    if hasattr(self, 'chute_status'):
-                        self.update_retro_indicator(self.chute_status, getattr(self, 'chute_deployed', False))
-                    try:
-                        margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
-                        stable = margin > 0.05
-                        self.update_retro_indicator(self.stable_status, stable)
-                    except:
-                        self.update_retro_indicator(self.stable_status, True)
-                else:
-                    if hasattr(self, 'engine_status'):
-                        self.update_professional_indicator(self.engine_status, current_thrust > 10, "BURN" if current_thrust > 10 else None)
-                    if hasattr(self, 'chute_status'):
-                        self.update_professional_indicator(self.chute_status, getattr(self, 'chute_deployed', False), "DEPLOYED" if getattr(self, 'chute_deployed', False) else None)
-                    try:
-                        margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
-                        stable = margin > 0.05
-                        self.update_professional_indicator(self.stable_status, stable, "STABLE" if stable else "UNSTABLE")
-                    except:
-                        self.update_professional_indicator(self.stable_status, True, "STABLE")
+                # Status indicators removed
                     
             except Exception as e:
                 pass  # Silently handle any telemetry update errors
         else:
             # Reset displays when not launching - theme-appropriate formatting
-            if self.current_theme == "retro":
-                self.altitude_display.value_label.setText("0.0 m")
-                self.velocity_display.value_label.setText("0.0 m/s")
-                self.acceleration_display.value_label.setText("0.0 m/s²")
-                self.g_force_display.value_label.setText("0.0 G")
-                self.thrust_display.value_label.setText("0 N")
-                self.drag_display.value_label.setText("0.0 N")
-                self.time_display.setText("T+ 0.0s")
-            else:
-                self.altitude_display.value_label.setText("0.0 m")
-                self.velocity_display.value_label.setText("0.0 m/s")
-                self.acceleration_display.value_label.setText("0.0 m/s²")
-                self.g_force_display.value_label.setText("0.0 G")
-                self.thrust_display.value_label.setText("0 N")
-                self.drag_display.value_label.setText("0.0 N")
-                self.time_display.setText("T+ 000.0")
+            # Telemetry scoreboard removed: no reset actions
             
-            try:
-                m, _, _, _, _, _, _, _, _, _, _, _ = self.get_inputs_for_simulation()
-                self.mass_display.value_label.setText(f"{m:.2f} kg")
-            except:
-                self.mass_display.value_label.setText("0.0 kg")
-            
-            self.mach_display.value_label.setText("0.00")
-            self.phase_display.setText("STANDBY")
-            
-            # Update status indicators for standby
-            if self.current_theme == "retro":
-                if hasattr(self, 'engine_status'):
-                    self.update_retro_indicator(self.engine_status, False)
-                if hasattr(self, 'chute_status'):
-                    self.update_retro_indicator(self.chute_status, False)
-                try:
-                    margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
-                    stable = margin > 0.05
-                    self.update_retro_indicator(self.stable_status, stable)
-                except:
-                    self.update_retro_indicator(self.stable_status, True)
-            else:
-                if hasattr(self, 'engine_status'):
-                    self.update_professional_indicator(self.engine_status, False)
-                if hasattr(self, 'chute_status'):
-                    self.update_professional_indicator(self.chute_status, False)
-                try:
-                    margin = self.center_of_pressure_input.value() - self.center_of_mass_input.value()
-                    stable = margin > 0.05
-                    self.update_professional_indicator(self.stable_status, stable, "STABLE" if stable else "UNSTABLE")
-                except:
-                    self.update_professional_indicator(self.stable_status, True, "STABLE")
+            pass
 
     def update_force_diagram(self):
         """Update the real-time force vector diagram"""
@@ -3117,13 +2875,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.save_theme_preference()
 
     def toggle_fbd_animation(self):
-        if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
-            if self.anim_pause_button.isChecked():
-                self.anim_pause_button.setText('Resume')
-                self._fbd_timer.stop()
-            else:
-                self.anim_pause_button.setText('Pause')
-                self._fbd_timer.start(self.anim_speed_slider.value())
+        # Animation removed
+        return
 
     def start_launch_animation(self):
         """Start the rocket launch animation"""
@@ -3583,16 +3336,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.launch_button.setEnabled(True)
 
     def set_fbd_anim_speed(self):
-        if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
-            if not self.anim_pause_button.isChecked():
-                # Map slider value (0-100) to speed multiplier (0.5x-5x)
-                slider_val = self.anim_speed_slider.value()
-                # 0 = 0.5x, 50 = 1x, 100 = 5x
-                speed_mult = 0.5 + (slider_val / 100.0) * 4.5
-                # Base interval (ms) for 1x speed (e.g., 15ms for smoother animation)
-                base_interval = 15
-                interval = int(base_interval / speed_mult)
-                self._fbd_timer.start(interval)
+        # Animation removed
+        return
 
     def update_conversions(self, field):
         # Only convert value if the user changes the unit, not on load
@@ -3811,36 +3556,22 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 f"[Max Times] Apogee: {max_alt_time:.2f}s | Velocity: {max_vel_time:.2f}s | Mach: {max_mach_time:.2f}s | Thrust: {max_thrust_time:.2f}s | Drag: {max_drag_time:.2f}s | Mass: {max_mass_time:.2f}s"
             )
 
-            stats_html = f"""
-<div style='width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background:#181818;'>
-    <table style='width:98vw;max-width:900px;height:92vh;min-height:400px;border-collapse:collapse;font-family:PressStart2P,monospace;font-size:1.2vw;letter-spacing:0.04em;background:#111;color:#111;border:6px solid #FFD447;box-shadow:0 0 24px #000;overflow:hidden;text-align:center;'>
-        <tr>
-            <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 1vw 2vw 2vw; border-right:4px solid #FFD447;'>
-                <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>TIME</td><td style='text-align:center;'>{results[-1]['time']:.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>APOGEE</td><td style='text-align:center;'>{max_alt_disp:.2f} {alt_unit.upper()}</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>VELOCITY</td><td style='text-align:center;'>{max_vel_disp:.2f} {vel_unit.upper()}</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MACH</td><td style='text-align:center;'>{max_mach:.2f}</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>THRUST</td><td style='text-align:center;'>{max_thrust_disp:.2f} {thrust_unit.upper()}</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>DRAG</td><td style='text-align:center;'>{max_drag_disp:.2f} {drag_unit.upper()}</td></tr>
-                    <tr><td style='font-weight:bold;text-align:center;'>MASS</td><td style='text-align:center;'>{max_mass_disp:.2f} {mass_unit.upper()}</td></tr>
-                </table>
-            </td>
-            <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 2vw 2vw 1vw;'>
-                <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX APOGEE</td><td style='text-align:center;'>{max_alt_disp:.2f} {alt_unit.upper()} T={max_alt_time:.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX VELOCITY</td><td style='text-align:center;'>{max_vel_disp:.2f} {vel_unit.upper()} T={max_vel_time:.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX MACH</td><td style='text-align:center;'>{max_mach:.2f} T={max_mach_time:.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX THRUST</td><td style='text-align:center;'>{max_thrust_disp:.2f} {thrust_unit.upper()} T={max_thrust_time:.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX DRAG</td><td style='text-align:center;'>{max_drag_disp:.2f} {drag_unit.upper()} T={max_drag_time:.2f} S</td></tr>
-                    <tr><td style='font-weight:bold;text-align:center;'>MAX MASS</td><td style='text-align:center;'>{max_mass_disp:.2f} {mass_unit.upper()} T={max_mass_time:.2f} S</td></tr>
-                </table>
-            </td>
-        </tr>
+            # Nicely formatted compact HTML summary table (final stats)
+            summary_html = f"""
+<div style='font-family:Consolas, Courier New, monospace; font-size:12px; line-height:1.25;'>
+    <table style='border-collapse:collapse;'>
+        <tr><th style='text-align:left;padding:2px 8px;border-bottom:1px solid #BCA16A;'>Metric</th>
+                <th style='text-align:right;padding:2px 8px;border-bottom:1px solid #BCA16A;'>Value</th></tr>
+        <tr><td style='padding:2px 8px;'>Apogee</td><td style='padding:2px 8px;text-align:right;'>{max_alt_disp:.2f} {alt_unit.upper()}</td></tr>
+        <tr><td style='padding:2px 8px;'>Max Velocity</td><td style='padding:2px 8px;text-align:right;'>{max_vel_disp:.2f} {vel_unit.upper()}</td></tr>
+        <tr><td style='padding:2px 8px;'>Max Mach</td><td style='padding:2px 8px;text-align:right;'>{max_mach:.2f}</td></tr>
+        <tr><td style='padding:2px 8px;'>Max Thrust</td><td style='padding:2px 8px;text-align:right;'>{max_thrust_disp:.2f} {thrust_unit.upper()}</td></tr>
+        <tr><td style='padding:2px 8px;'>Max Drag</td><td style='padding:2px 8px;text-align:right;'>{max_drag_disp:.2f} {drag_unit.upper()}</td></tr>
+        <tr><td style='padding:2px 8px;'>Final Mass</td><td style='padding:2px 8px;text-align:right;'>{max_mass_disp:.2f} {mass_unit.upper()}</td></tr>
     </table>
 </div>
 """
-            self.result_label.setText(stats_html)
+            self.result_label.setText(summary_html)
         else:
             self.result_label.setText("No results to display.")
 
@@ -3950,9 +3681,6 @@ class RocketSimulationUI(QtWidgets.QWidget):
             subframes_per_frame = 5
             if frame >= n_frames - 1:
                 self._fbd_timer.stop()
-                self.phase_progress.setValue(100)
-                self.phase_progress.setFormat('LANDED')
-                self.phase_progress.setStyleSheet(self.phase_progress.styleSheet() + 'QProgressBar::chunk { background-color: #3C2F1E; color: #FFD447; }')
                 return
             result_a = self._fbd_results[frame]
             result_b = self._fbd_results[min(frame+1, n_frames-1)]
@@ -4088,61 +3816,39 @@ class RocketSimulationUI(QtWidgets.QWidget):
             dragstrip = (
                 f"[Max Times] Apogee: {get_max_time('altitude'):.2f}s | Velocity: {get_max_time('velocity'):.2f}s | Mach: {max_mach_time:.2f}s | Thrust: {get_max_time('thrust'):.2f}s | Drag: {get_max_time('drag'):.2f}s | Mass: {get_max_time('mass'):.2f}s"
             )
-            stats_html = f"""
-<div style='width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background:#181818;'>
-    <table style='width:98vw;max-width:900px;height:92vh;min-height:400px;border-collapse:collapse;font-family:PressStart2P,monospace;font-size:1.2vw;letter-spacing:0.04em;background:#111;color:#111;border:6px solid #FFD447;box-shadow:0 0 24px #000;overflow:hidden;text-align:center;'>
+            # Live compact table for current frame values
+            live_html = f"""
+<div style='font-family:Consolas, Courier New, monospace; font-size:11px;'>
+    <table style='border-collapse:collapse;'>
         <tr>
-            <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 1vw 2vw 2vw; border-right:4px solid #FFD447;'>
-                <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>TIME</td><td style='text-align:center;'>{x_pos:.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>ALTITUDE</td><td style='text-align:center;'>{alt_disp:.2f} {alt_unit.upper()}</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>VELOCITY</td><td style='text-align:center;'>{vel_disp:.2f} {vel_unit.upper()}</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MACH</td><td style='text-align:center;'>{mach:.2f}</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>THRUST</td><td style='text-align:center;'>{thrust_disp:.2f} {thrust_unit.upper()}</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>DRAG</td><td style='text-align:center;'>{drag_disp:.2f} {drag_unit.upper()}</td></tr>
-                    <tr><td style='font-weight:bold;text-align:center;'>MASS</td><td style='text-align:center;'>{mass_disp:.2f} {mass_unit.upper()}</td></tr>
-                </table>
-            </td>
-            <td style='vertical-align:top; text-align:center; width:50%; padding:2vw 2vw 2vw 1vw;'>
-                <table style='width:100%;font-size:inherit;border-collapse:collapse;text-align:center;'>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX APOGEE</td><td style='text-align:center;'>{get_max_time('altitude'):.2f} {alt_unit.upper()} T={get_max_time('altitude'):.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX VELOCITY</td><td style='text-align:center;'>{get_max_time('velocity'):.2f} {vel_unit.upper()} T={get_max_time('velocity'):.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX MACH</td><td style='text-align:center;'>{max_mach:.2f} T={max_mach_time:.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX THRUST</td><td style='text-align:center;'>{get_max_time('thrust'):.2f} {thrust_unit.upper()} T={get_max_time('thrust'):.2f} S</td></tr>
-                    <tr style="border-bottom:3px solid #FFD447;"><td style='font-weight:bold;text-align:center;'>MAX DRAG</td><td style='text-align:center;'>{get_max_time('drag'):.2f} {drag_unit.upper()} T={get_max_time('drag'):.2f} S</td></tr>
-                    <tr><td style='font-weight:bold;text-align:center;'>MAX MASS</td><td style='text-align:center;'>{get_max_time('mass'):.2f} {mass_unit.upper()} T={get_max_time('mass'):.2f} S</td></tr>
-                </table>
-            </td>
+            <th style='text-align:left;padding:1px 6px;border-bottom:1px solid #BCA16A;'>t (s)</th>
+            <th style='text-align:right;padding:1px 6px;border-bottom:1px solid #BCA16A;'>{x_pos:.2f}</th>
+            <th style='text-align:left;padding:1px 6px;border-bottom:1px solid #BCA16A;'>Alt ({alt_unit.upper()})</th>
+            <th style='text-align:right;padding:1px 6px;border-bottom:1px solid #BCA16A;'>{alt_disp:.2f}</th>
+            <th style='text-align:left;padding:1px 6px;border-bottom:1px solid #BCA16A;'>Vel ({vel_unit.upper()})</th>
+            <th style='text-align:right;padding:1px 6px;border-bottom:1px solid #BCA16A;'>{vel_disp:.2f}</th>
+        </tr>
+        <tr>
+            <td style='padding:1px 6px;'>Mach</td><td style='padding:1px 6px;text-align:right;'>{mach:.2f}</td>
+            <td style='padding:1px 6px;'>Thrust ({thrust_unit.upper()})</td><td style='padding:1px 6px;text-align:right;'>{thrust_disp:.2f}</td>
+            <td style='padding:1px 6px;'>Drag ({drag_unit.upper()})</td><td style='padding:1px 6px;text-align:right;'>{drag_disp:.2f}</td>
+        </tr>
+        <tr>
+            <td style='padding:1px 6px;'>Mass ({mass_unit.upper()})</td><td style='padding:1px 6px;text-align:right;'>{mass_disp:.2f}</td>
+            <td style='padding:1px 6px;'>Max Alt (t)</td><td style='padding:1px 6px;text-align:right;'>{get_max_time('altitude'):.2f}</td>
+            <td style='padding:1px 6px;'>Max Vel (t)</td><td style='padding:1px 6px;text-align:right;'>{get_max_time('velocity'):.2f}</td>
         </tr>
     </table>
 </div>
 """
-            self.result_label.setText(stats_html)
+            self.result_label.setText(live_html)
 
-            # --- Progress bar update ---
-            percent = int(100 * frame / (len(self._fbd_results)-1))
-            phase = get_flight_phase(result_a, result_b).upper()
-            self.phase_progress.setValue(percent)
-            # Inverse color for phase text inside bar
-            if phase in ['LIFTOFF', 'POWERED ASCENT', 'COAST', 'APOGEE', 'DESCENT', 'CHUTE DESCENT']:
-                self.phase_progress.setFormat(phase)
-                # Red chunk, beige text
-                self.phase_progress.setStyleSheet(self.phase_progress.styleSheet() + 'QProgressBar::chunk { background-color: #E94F37; color: #FDF6E3; }')
-            elif phase == 'LANDED':
-                self.phase_progress.setFormat('LANDED')
-                # Brown chunk, yellow text
-                self.phase_progress.setStyleSheet(self.phase_progress.styleSheet() + 'QProgressBar::chunk { background-color: #3C2F1E; color: #FFD447; }')
+            # (Progress bar / phase display removed.)
 
             self.canvas.draw_idle()
             self._fbd_frame += 1
 
-        # Use QTimer for animation
-        if hasattr(self, '_fbd_timer') and self._fbd_timer is not None:
-            self._fbd_timer.stop()
-        self._fbd_timer = QtCore.QTimer()
-        self._fbd_timer.timeout.connect(fbd_anim_step)
-        self._fbd_frame = 0
-        self._fbd_timer.start(self.anim_speed_slider.value())
+        # Animation removed: no QTimer started
 
         # Add popup tooltip on hover (default to altitude, or first selected variable)
         if not hasattr(self, 'tooltip'):
@@ -4219,7 +3925,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
             'chute_height_unit': self.chute_height_unit.currentIndex(),
             'chute_size': self.chute_size_input.text(),
             'chute_size_unit': self.chute_size_unit.currentIndex(),
-            'graph_select': self.graph_select.currentIndex(),
+            # graph_select removed (single-variable dropdown deleted), multi-variable checkboxes persist
             'chute_cd': self.chute_cd_input.text(),
             'start_altitude': self.start_altitude_input.text(),
             'temperature': self.temperature_input.text(),
@@ -4259,8 +3965,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.start_altitude_input.setText(str(data.get('start_altitude', '0')))
             self.temperature_input.setText(str(data.get('temperature', '15')))
             self.humidity_input.setText(str(data.get('humidity', '50')))
-            graph_index = data.get('graph_select', 0)
-            self.graph_select.setCurrentIndex(graph_index)
+            # graph_select state no longer loaded (dropdown removed)
         except Exception:
             pass
 
