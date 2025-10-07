@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "name": "Von Braun",
+  "description": "SUPERMACH!",
+  "created": "Tue Oct 7 13:01:11 2025",
+  "rocket_parameters": {
+    "mass": "5.0",
+    "mass_unit": 0,
+    "cd": "0.75",
+    "area": "0.004560",
+    "area_unit": 0,
+    "rho": "1.109",
+    "rho_unit": 0,
+    "timestep": "0.05",
+    "timestep_unit": 0,
+    "fin_count": "4",
+    "fin_thickness": "0.125",
+    "fin_thickness_unit": 2,
+    "fin_length": "2.5",
+    "fin_length_unit": 2,
+    "body_diameter": "3",
+    "body_diameter_unit": 2,
+    "chute_height": "300",
+    "chute_height_unit": 0,
+    "chute_size": "15",
+    "chute_size_unit": 1,
+    "chute_cd": "2.2"
+  },
+  "launch_conditions": {
+    "start_altitude": "500",
+    "temperature": "26.66666667",
+    "humidity": "40"
+  },
+  "stability_settings": {
+    "rocket_length": 1.0,
+    "center_of_mass": 0.5,
+    "center_of_pressure": 0.7,
+    "launch_angle": 0.0
+  },
+  "wind_settings": {
+    "wind_speed": 0.0,
+    "wind_direction": 0
+  },
+  "thrust_curve_path": null
+}

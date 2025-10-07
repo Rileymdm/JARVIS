@@ -1,8 +1,8 @@
-"motor:","Hypertek 835CC172J-J317"
-"contributor:","John Coker"
-"details:","https://www.thrustcurve.org/simfiles/5f4294d20002e900000000dd/"
-
-"Time (s)","Thrust (N)"
+motor:,Hypertek 835CC172J-J317
+contributor:,John Coker
+details:,https://www.thrustcurve.org/simfiles/5f4294d20002e900000000dd/
+1758g,712g
+Time (s),Thrust (N)
 0.071,438.483
 0.215,471.024
 0.358,459.716

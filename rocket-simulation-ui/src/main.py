@@ -399,7 +399,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 background-color: {theme['colors']['secondary_bg']};
                 border: 1px solid {theme['colors']['accent']};
                 border-radius: 4px;
-                padding: 6px;
+                padding: 8px 16px;
                 color: {theme['colors']['primary_text']};
             }}
 
@@ -1338,6 +1338,55 @@ class RocketSimulationUI(QtWidgets.QWidget):
         units_layout.addWidget(self.unit_select)
         
         settings_layout.addWidget(units_group)
+        
+        # Rocket Configuration Profiles section
+        profiles_group = QtWidgets.QGroupBox("Rocket Configuration Profiles")
+        profiles_layout = QtWidgets.QVBoxLayout(profiles_group)
+        
+        # Profile selection and management
+        profile_selection_layout = QtWidgets.QHBoxLayout()
+        profile_selection_layout.addWidget(QtWidgets.QLabel("Current Profile:"))
+        
+        self.profile_select = QtWidgets.QComboBox()
+        self.profile_select.setEditable(False)
+        self.load_available_profiles()
+        self.profile_select.currentTextChanged.connect(self.load_profile)
+        profile_selection_layout.addWidget(self.profile_select)
+        
+        profiles_layout.addLayout(profile_selection_layout)
+        
+        # Profile management buttons
+        profile_buttons_layout = QtWidgets.QHBoxLayout()
+        
+        self.save_profile_button = QtWidgets.QPushButton("Save Current Settings")
+        self.save_profile_button.setToolTip("Save current rocket parameters as a new profile")
+        self.save_profile_button.clicked.connect(self.save_current_profile)
+        profile_buttons_layout.addWidget(self.save_profile_button)
+        
+        self.delete_profile_button = QtWidgets.QPushButton("Delete Profile")
+        self.delete_profile_button.setToolTip("Delete the selected profile")
+        self.delete_profile_button.clicked.connect(self.delete_current_profile)
+        profile_buttons_layout.addWidget(self.delete_profile_button)
+        
+        self.export_profile_button = QtWidgets.QPushButton("Export")
+        self.export_profile_button.setToolTip("Export profile to file")
+        self.export_profile_button.clicked.connect(self.export_profile)
+        profile_buttons_layout.addWidget(self.export_profile_button)
+        
+        self.import_profile_button = QtWidgets.QPushButton("Import")
+        self.import_profile_button.setToolTip("Import profile from file")
+        self.import_profile_button.clicked.connect(self.import_profile)
+        profile_buttons_layout.addWidget(self.import_profile_button)
+        
+        profiles_layout.addLayout(profile_buttons_layout)
+        
+        # Profile description
+        self.profile_description = QtWidgets.QLabel("Profiles store all rocket parameters, thrust curves, and launch conditions for quick switching between different rocket configurations.")
+        self.profile_description.setWordWrap(True)
+        self.profile_description.setStyleSheet("color: #666; font-style: italic; font-size: 10px;")
+        profiles_layout.addWidget(self.profile_description)
+        
+        settings_layout.addWidget(profiles_group)
         settings_layout.addStretch()
         self.tabs.addTab(settings_widget, "Settings")
 
@@ -1504,6 +1553,19 @@ class RocketSimulationUI(QtWidgets.QWidget):
         main_launch_split.addWidget(right_panel, 1)
         launch_anim_layout.addLayout(main_launch_split, 1)
 
+        # Force diagram idle refresh timer (updates when not launching)
+        # Ensures Live Forces panel stays current (e.g., weight changes if mass input changes)
+        if not hasattr(self, 'force_update_timer'):
+            self.force_update_timer = QtCore.QTimer()
+            def _idle_force_update():
+                try:
+                    if not self.is_launching:
+                        self.update_force_diagram()
+                except Exception:
+                    pass
+            self.force_update_timer.timeout.connect(_idle_force_update)
+            self.force_update_timer.start(150)  # ~6-7 fps while idle for smoother updates
+
         # Retro styled Launch/Stop buttons
         buttons_row = QtWidgets.QHBoxLayout()
         self.launch_button = QtWidgets.QPushButton('Launch!')
@@ -1557,6 +1619,25 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.is_launching = False
         self.launch_timer = QtCore.QTimer()
         self.launch_timer.timeout.connect(self.update_launch_frame)
+        
+        # Debounced input update timer for force diagram
+        self.input_debounce_timer = QtCore.QTimer()
+        self.input_debounce_timer.setSingleShot(True)
+        self.input_debounce_timer.timeout.connect(lambda: self.update_force_diagram() if not self.is_launching else None)
+        
+        # Connect key inputs to debounced force updates (500ms delay to avoid excessive redraws while typing)
+        def _debounced_force_update():
+            if hasattr(self, 'input_debounce_timer'):
+                self.input_debounce_timer.start(500)
+        
+        # Mass affects weight force
+        self.mass_input.textChanged.connect(_debounced_force_update)
+        # Wind affects stability calculations  
+        self.wind_speed_input.valueChanged.connect(_debounced_force_update)
+        self.wind_direction_input.valueChanged.connect(_debounced_force_update)
+        # Stability parameters affect force calculations
+        self.center_of_mass_input.valueChanged.connect(_debounced_force_update)
+        self.center_of_pressure_input.valueChanged.connect(_debounced_force_update)
 
         def update_launch_animation():
             """Update static preview of launch trajectory using real simulation parameters"""
@@ -1621,10 +1702,10 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 net_force = current_thrust - drag_force - (mass * g)
                 acceleration = net_force / mass
                 
-                # Add instability
-                if not stable:
-                    wobble = 0.3 * math.sin(t * 8) * (1 + t * 0.05)
-                    acceleration += wobble
+                # Significantly limit max acceleration to avoid unrealistic spikes
+                max_total_accel = 100.0  # m/s²
+                if abs(acceleration) > max_total_accel:
+                    acceleration = np.sign(acceleration) * max_total_accel
                 
                 # Update motion
                 velocity += acceleration * dt
@@ -1735,6 +1816,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
     def load_thrust_curve_data(self):
         """Load thrust curve data from file or use default. Returns (times, thrusts, thrust_func, burn_time)"""
         thrust_data = []
+        self.current_motor_info = {}  # Reset motor info
+        
         if hasattr(self, 'thrust_curve_path') and self.thrust_curve_path:
             path = self.thrust_curve_path
             _, ext = os.path.splitext(path.lower())
@@ -1750,7 +1833,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 thrust_data = []
         
         if not thrust_data or len(thrust_data) < 2:
-            # Default thrust curve
+            # Default thrust curve with motor info
+            self.current_motor_info = {
+                'name': 'Default Motor',
+                'propellant_mass': 50.0,  # grams
+                'total_mass': 150.0       # grams
+            }
             thrust_data = [
                 (0.124, 816.849), (0.375, 796.043), (0.626, 781.861), (0.877, 767.440),
                 (1.129, 759.627), (1.380, 735.948), (1.631, 714.454), (1.883, 701.582),
@@ -1775,30 +1863,150 @@ class RocketSimulationUI(QtWidgets.QWidget):
         times_thrust, thrusts = zip(*deduped)
         thrust_func = interp1d(times_thrust, thrusts, bounds_error=False, fill_value=0.0)
         burn_time = times_thrust[-1]
+        
+        # Display motor info if available
+        self.display_motor_info()
+        
         return times_thrust, thrusts, thrust_func, burn_time
+
+    def display_motor_info(self):
+        """Display extracted motor information in the results label"""
+        if hasattr(self, 'current_motor_info') and self.current_motor_info:
+            info = self.current_motor_info
+            info_text = "<b>Motor Information:</b><br>"
+            
+            if 'name' in info:
+                info_text += f"• Name: {info['name']}<br>"
+            if 'propellant_mass' in info:
+                info_text += f"• Propellant Mass: {info['propellant_mass']:.1f}g<br>"
+            if 'total_mass' in info:
+                info_text += f"• Total Mass: {info['total_mass']:.1f}g<br>"
+            if 'burn_time' in info:
+                info_text += f"• Burn Time: {info['burn_time']:.1f}s<br>"
+            if 'diameter' in info:
+                info_text += f"• Diameter: {info['diameter']:.0f}mm<br>"
+            if 'length' in info:
+                info_text += f"• Length: {info['length']:.0f}mm<br>"
+            if 'isp' in info:
+                info_text += f"• Specific Impulse: {info['isp']:.0f}s<br>"
+                
+            # Update the result label to show motor info
+            current_text = self.result_label.text()
+            if "Motor Information:" not in current_text:
+                if current_text.strip() == "Results will be displayed here.":
+                    self.result_label.setText(info_text)
+                else:
+                    self.result_label.setText(info_text + "<br>" + current_text)
 
     def parse_csv_thrust(self, path):
         data = []
+        motor_info = {}
+        
         with open(path, 'r', newline='') as f:
             reader = csv.reader(f)
-            for row in reader:
-                if not row:
+            rows = list(reader)
+        
+        # Look for mass values in rows immediately above the time/thrust header
+        time_header_row = None
+        for i, row in enumerate(rows):
+            if len(row) >= 2:
+                # Check if this looks like the time/thrust header row
+                if (row[0].strip().lower().replace('(', '').replace(')', '').replace('"', '') in ['time', 'time s', 'time(s)', 'times'] and
+                    'thrust' in row[1].strip().lower()):
+                    time_header_row = i
+                    
+                    # Check the row immediately above for mass values
+                    if i > 0:
+                        mass_row = rows[i-1]
+                        if len(mass_row) >= 2:
+                            # Total mass above time column (first value)
+                            try:
+                                total_mass_str = mass_row[0].strip().replace('"', '').replace('g', '').replace('grams', '').strip()
+                                if total_mass_str and total_mass_str.replace('.', '').replace('-', '').isdigit():
+                                    motor_info['total_mass'] = float(total_mass_str)
+                            except (ValueError, IndexError):
+                                pass
+                            
+                            # Propellant mass above thrust column (second value)
+                            try:
+                                prop_mass_str = mass_row[1].strip().replace('"', '').replace('g', '').replace('grams', '').strip()
+                                if prop_mass_str and prop_mass_str.replace('.', '').replace('-', '').isdigit():
+                                    motor_info['propellant_mass'] = float(prop_mass_str)
+                            except (ValueError, IndexError):
+                                pass
+                    break
+        
+        # Also look for motor info in metadata rows (existing functionality)
+        for row in rows:
+            if not row:
+                continue
+                
+            # Extract motor metadata from header rows
+            if len(row) >= 2:
+                key = row[0].strip().lower().replace(':', '').replace('"', '')
+                value = row[1].strip().replace('"', '')
+                
+                # Look for propellant mass in various formats
+                if 'propellant' in key and 'mass' in key:
+                    try:
+                        motor_info['propellant_mass'] = float(value)
+                    except ValueError:
+                        pass
+                elif 'prop' in key and ('mass' in key or 'weight' in key):
+                    try:
+                        motor_info['propellant_mass'] = float(value)
+                    except ValueError:
+                        pass
+                elif key in ['propellant_mass', 'prop_mass', 'fuel_mass']:
+                    try:
+                        motor_info['propellant_mass'] = float(value)
+                    except ValueError:
+                        pass
+                # Store other motor info
+                elif key in ['motor', 'name', 'designation']:
+                    motor_info['name'] = value
+                elif key in ['total_mass', 'loaded_mass']:
+                    try:
+                        motor_info['total_mass'] = float(value)
+                    except ValueError:
+                        pass
+                elif key in ['burn_time', 'burntime']:
+                    try:
+                        motor_info['burn_time'] = float(value)
+                    except ValueError:
+                        pass
+        
+        # Parse thrust data (skip metadata and header rows)
+        for row in rows:
+            if not row:
+                continue
+                
+            first = row[0].strip()
+            if not first:
+                continue
+            if first.startswith('#') or first.startswith(';'):
+                continue
+                
+            # Skip header rows with text labels
+            if first.lower().replace('(', '').replace(')', '').replace('"', '') in ['time', 'time s', 'time(s)', 'times'] or 'time' in first.lower():
+                continue
+                
+            try:
+                t = float(first)
+                thrust = float(row[1]) if len(row) > 1 else None
+                if thrust is None:
                     continue
-                # skip commented/header lines starting with a non-numeric token
-                first = row[0].strip()
-                if not first:
-                    continue
-                if first.startswith('#') or first.startswith(';'):
-                    continue
-                try:
-                    t = float(first)
-                    thrust = float(row[1]) if len(row) > 1 else None
-                    if thrust is None:
-                        continue
-                    data.append((t, thrust))
-                except Exception:
-                    # header line like "time,thrust" -> skip
-                    continue
+                data.append((t, thrust))
+            except Exception:
+                # Non-numeric row -> skip
+                continue
+                    
+        # Store motor info for later use
+        if hasattr(self, 'current_motor_info'):
+            self.current_motor_info.update(motor_info)
+        else:
+            self.current_motor_info = motor_info
+            
         # ensure sorted and unique by time (keep last occurrence on duplicates)
         data.sort(key=lambda x: x[0])
         deduped = []
@@ -1813,9 +2021,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
         return deduped
 
     def parse_rasp_eng_thrust(self, path):
-        """Parse a simple RASP/ENG motor file. We read the first motor block's time/thrust pairs.
-        Lines starting with ';' or '#' are comments. The first non-comment line is header. Following lines until a blank/comment are time thrust pairs."""
+        """Parse a RASP/ENG motor file. Extract motor specs from header and time/thrust pairs.
+        RASP format: name dia len delays prop_mass total_mass Isp mass_frac Cd_frac vol_loading
+        Lines starting with ';' or '#' are comments."""
         data = []
+        motor_info = {}
+        
         with open(path, 'r') as f:
             lines = f.readlines()
         # strip whitespace
@@ -1826,9 +2037,27 @@ class RocketSimulationUI(QtWidgets.QWidget):
             i += 1
         if i >= len(lines):
             return data
-        # header line (ignored for now)
-        i += 1
-        # read pairs
+            
+        # Parse header line (RASP format)
+        header_line = lines[i]
+        try:
+            parts = header_line.split()
+            if len(parts) >= 6:
+                motor_info['name'] = parts[0]
+                motor_info['diameter'] = float(parts[1])  # mm
+                motor_info['length'] = float(parts[2])    # mm
+                # Skip delays (parts[3])
+                motor_info['propellant_mass'] = float(parts[4])  # grams
+                motor_info['total_mass'] = float(parts[5])       # grams
+                if len(parts) >= 7:
+                    motor_info['isp'] = float(parts[6])          # seconds
+        except (ValueError, IndexError):
+            # If header parsing fails, continue with just thrust data
+            pass
+            
+        i += 1  # Skip header line
+        
+        # read time/thrust pairs
         while i < len(lines):
             ln = lines[i]
             if not ln or ln.startswith(';') or ln.startswith('#'):
@@ -1975,12 +2204,14 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.chute_drag_display = self.create_force_display("CHUTE", "0.0", "N", "#FF00FF")
         self.weight_force_display = self.create_force_display("WEIGHT", "0.0", "N", "#FFAA00")
         self.net_force_display = self.create_force_display("NET", "0.0", "N", "#00D4FF")
+        self.velocity_display = self.create_force_display("VELOCITY", "0.0", "m/s", "#002FFF")
         
         forces_grid.addWidget(self.thrust_force_display, 0, 0)
         forces_grid.addWidget(self.drag_force_display, 0, 1)
         forces_grid.addWidget(self.chute_drag_display, 1, 0)
         forces_grid.addWidget(self.weight_force_display, 1, 1)
-        forces_grid.addWidget(self.net_force_display, 2, 0, 1, 2)  # Span both columns
+        forces_grid.addWidget(self.net_force_display, 2, 0)
+        forces_grid.addWidget(self.velocity_display, 2, 1)
         
         layout.addLayout(forces_grid)
         
@@ -2451,9 +2682,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 widget.led.setStyleSheet("""
                     color: #00FF41;
                     font-size: 14px;
+                    font-weight: bold;
                     background: rgba(0, 255, 65, 0.2);
                     border-radius: 8px;
-                    border: 1px solid #00FF41;
                 """)
                 widget.status_text.setStyleSheet("""
                     font-size: 8px;
@@ -2508,23 +2739,25 @@ class RocketSimulationUI(QtWidgets.QWidget):
             color: {color}; 
             font-weight: bold;
             text-transform: uppercase;
-            letter-spacing: 1px;
         """)
         
         # Value with larger, prominent display
-        value_widget = QtWidgets.QLabel(value)
+        value_text = f"{value} {unit}" if unit else value
+        value_widget = QtWidgets.QLabel(value_text)
         value_widget.setAlignment(QtCore.Qt.AlignCenter)
-        value_widget.setStyleSheet("""
+        value_widget.setStyleSheet(f"""
             font-size: 16px; 
             font-weight: bold; 
-            color: #2C3E50;
+            color: {color};
+            font-family: 'Consolas', 'Monaco', monospace;
             padding: 4px;
+            border-bottom: 1px solid {color};
         """)
         
         layout.addWidget(label_widget)
         layout.addWidget(value_widget)
         
-        # Store value widget for updates
+        # Store references for updates
         widget.value_label = value_widget
         widget.gauge_color = color
         
@@ -2575,7 +2808,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         layout.addLayout(status_layout)
         layout.addWidget(text)
         
-        # Store circle for updates
+        # Store references for updates
         widget.status_circle = circle
         widget.is_active = active
         
@@ -2612,8 +2845,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 
                 # Calculate drag force (approximation)
                 try:
-                    _, Cd, A, rho, _, _, _, _, _, _, _, _ = self.get_inputs_for_simulation()
-                    drag_force = 0.5 * rho * (velocity ** 2) * Cd * A if velocity > 0 else 0.0
+                    _, Cd, A, rho, _, _, _, _, _, chute_size, _, _ = self.get_inputs_for_simulation()
+                    drag_force = 0.5 * rho * (velocity ** 2) * Cd * A if velocity > 0 else 0
                 except:
                     drag_force = 0.0
                 
@@ -2694,9 +2927,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
                         chute_cd = 1.5  # Typical parachute drag coefficient
                         _, _, _, _, _, _, _, _, _, chute_size, _, _ = self.get_inputs_for_simulation()
                         if chute_size and chute_size > 0:
-                            chute_open_factor = getattr(self, 'chute_open_factor', 1.0)
-                            effective_chute_area = chute_size * chute_open_factor
-                            chute_drag_force = 0.5 * rho * (velocity ** 2) * chute_cd * effective_chute_area if velocity != 0 else 0.0
+                            chute_drag_force = 0.5 * rho * (velocity ** 2) * chute_cd * chute_size if velocity != 0 else 0.0
                             chute_drag_force = abs(chute_drag_force)
                     except:
                         chute_drag_force = 0.0
@@ -2715,12 +2946,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 scale = 1.0 / max_force  # Scale to unit vectors, then apply display scale
                 display_scale = 0.8  # Maximum arrow length
                 
-                # Draw parachute if deployed
+                # Rocket center reference (define before any drawing that uses it)
+                rocket_center_x, rocket_center_y = 0.0, 2.0
+
+                # Draw parachute if deployed (after we have center coordinates)
                 if chute_deployed:
                     self.draw_parachute(rocket_center_x, rocket_center_y, chute_open_factor)
-                
-                # Draw force vectors
-                rocket_center_x, rocket_center_y = 0.0, 2.0
                 
                 # Thrust vector (upward, green)
                 if thrust_force > 0:
@@ -2780,6 +3011,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
                     self.chute_drag_display.value.setText(f"{chute_drag_force:.0f} {self.chute_drag_display.unit}")
                     self.weight_force_display.value.setText(f"{weight_force:.0f} {self.weight_force_display.unit}")
                     self.net_force_display.value.setText(f"{net_force:.0f} {self.net_force_display.unit}")
+                    self.velocity_display.value.setText(f"{velocity:.1f} {self.velocity_display.unit}")
                     
                     # Update chute drag display color based on deployment
                     if chute_deployed:
@@ -2803,6 +3035,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
                     self.chute_drag_display.value.setText(f"0 {self.chute_drag_display.unit}")
                     self.weight_force_display.value.setText(f"{weight_force:.0f} {self.weight_force_display.unit}")
                     self.net_force_display.value.setText(f"0 {self.net_force_display.unit}")
+                    self.velocity_display.value.setText(f"0.0 {self.velocity_display.unit}")
                     
                     # Gray out chute display when not deployed
                     self.chute_drag_display.label.setStyleSheet("font-size: 9px; font-weight: bold; color: #808080;")
@@ -2813,6 +3046,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
                     self.chute_drag_display.value.setText(f"0 {self.chute_drag_display.unit}")
                     self.weight_force_display.value.setText(f"0 {self.weight_force_display.unit}")
                     self.net_force_display.value.setText(f"0 {self.net_force_display.unit}")
+                    self.velocity_display.value.setText(f"0.0 {self.velocity_display.unit}")
                     
                     # Gray out chute display
                     self.chute_drag_display.label.setStyleSheet("font-size: 9px; font-weight: bold; color: #808080;")
@@ -2824,6 +3058,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Refresh display
         self.force_canvas.draw()
+
+    # (Removed temporary stub definition of update_launch_frame; real implementation appears later.)
 
     def update_retro_indicator(self, widget, active):
         """Update retro-style status indicator"""
@@ -2917,6 +3153,11 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.launch_time = 0.0
         self.launch_button.setText('Launching...')
         self.launch_button.setEnabled(False)
+        
+        # Pause idle force updates during launch for efficiency
+        if hasattr(self, 'force_update_timer'):
+            self.force_update_timer.stop()
+        
         self.launch_timer.start(33)  # ~30fps for smoother animation (was 50ms/20fps)
 
     def stop_launch_animation(self):
@@ -2927,6 +3168,11 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.is_launching = False
             self.launch_button.setText('Launch!')
             self.launch_button.setEnabled(True)
+            
+            # Resume idle force updates
+            if hasattr(self, 'force_update_timer'):
+                self.force_update_timer.start(150)
+            
             # Optional: clear trail and reset camera smoothing to defaults
             self.position_history = []
             self.smooth_center_x = 0.0
@@ -3126,6 +3372,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         try:
             if (not self.apogee_marked) and (self.launch_prev_velocity > 0) and (self.launch_velocity <= 0) and (self.launch_altitude > 0.5):
                 self.apogee_marked = True
+               
                 self.apogee_pos = (self.launch_x_pos, self.launch_altitude)
                 self.apogee_flash_frames = 30
         except Exception:
@@ -3271,15 +3518,16 @@ class RocketSimulationUI(QtWidgets.QWidget):
             # Thrust
             max_thrust = max(thrusts) if thrusts else 1000
             t_scale = 0.4 * (current_thrust / max_thrust) if max_thrust > 0 else 0
-            ax.arrow(x_pos, y_pos, u_forward[0]*t_scale, u_forward[1]*t_scale, head_width=0.06, head_length=0.08, fc='green', ec='green', alpha=0.8, zorder=7)
+            ax.arrow(x_pos + arrow_x_offset, y_pos, 0, t_scale,
+                     head_width=0.06, head_length=0.08, fc='green', ec='green', alpha=0.8, zorder=7)
             # Drag opposite velocity
             if v_total > 1e-3:
                 d_dir = (-self.launch_x_vel / v_total, -self.launch_velocity / v_total)
                 d_scale = 0.4 * min(1.0, v_total / 50.0)
-                ax.arrow(x_pos, y_pos, d_dir[0]*d_scale, d_dir[1]*d_scale, head_width=0.06, head_length=0.08, fc='red', ec='red', alpha=0.8, zorder=7)
+                ax.arrow(x_pos + arrow_x_offset, y_pos, d_dir[0]*d_scale, d_dir[1]*d_scale, head_width=0.06, head_length=0.08, fc='red', ec='red', alpha=0.8, zorder=7)
             # Gravity
             g_len = 0.3
-            ax.arrow(x_pos, y_pos, 0, -g_len, head_width=0.06, head_length=0.08, fc='blue', ec='blue', alpha=0.8, zorder=7)
+            ax.arrow(x_pos + arrow_x_offset, y_pos, 0, -g_len, head_width=0.06, head_length=0.08, fc='blue', ec='blue', alpha=0.8, zorder=7)
 
         # Apogee flash marker
         if self.apogee_flash_frames and self.apogee_pos:
@@ -3327,6 +3575,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Update time
         self.launch_time += 0.05
+
+        # Update live force diagram in sync with animation
+        try:
+            self.update_force_diagram()
+        except Exception:
+            pass
         
         # End animation when rocket impacts ground, or after a safety max duration
         if (y_pos <= 0 and t > 1) or self.launch_time > 60:
@@ -3334,6 +3588,10 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.is_launching = False
             self.launch_button.setText('Launch Again!')
             self.launch_button.setEnabled(True)
+            
+            # Resume idle force updates
+            if hasattr(self, 'force_update_timer'):
+                self.force_update_timer.start(150)
 
     def set_fbd_anim_speed(self):
         # Animation removed
@@ -3527,29 +3785,6 @@ class RocketSimulationUI(QtWidgets.QWidget):
             max_mach = max(machs)
             max_mach_idx = machs.index(max_mach)
             max_mach_time = results[max_mach_idx]['time']
-
-            vel_unit = 'm/s'
-            alt_unit = 'm'
-            thrust_unit = 'N'
-            drag_unit = 'N'
-            mass_unit = 'kg'
-            if self.unit_select.currentIndex() == 1:
-                max_vel_disp = max_vel * 3.28084
-                vel_unit = 'ft/s'
-                max_alt_disp = max_alt * 3.28084
-                alt_unit = 'ft'
-                max_thrust_disp = max_thrust * 0.224809
-                thrust_unit = 'lbf'
-                max_drag_disp = max_drag * 0.224809
-                drag_unit = 'lbf'
-                max_mass_disp = max_mass * 2.20462
-                mass_unit = 'lb'
-            else:
-                max_vel_disp = max_vel
-                max_alt_disp = max_alt
-                max_thrust_disp = max_thrust
-                max_drag_disp = max_drag
-                max_mass_disp = max_mass
 
             # Dragstrip-style stat: show all max times in a single line
             dragstrip = (
@@ -3756,8 +3991,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             thrust_b = result_b['thrust']
             drag_a = result_a['drag']
             drag_b = result_b['drag']
-            thrust_val = (thrust_a + (thrust_b - thrust_a) * frac) / max_thrust if max_thrust else 0
-            drag_val = (drag_a + (drag_b - drag_a) * frac) / max_drag if max_drag else 0
+            thrust_val = (thrust_a + (thrust_b - thrust_a) * frac) / max_thrust if max_thrust > 0 else 0
+            drag_val = (drag_a + (drag_b - drag_a) * frac) / max_drag if max_drag > 0 else 0
             # Update thrust arrow (upwards from rocket base)
             thrust_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos, y_pos + thrust_val * 0.2])
             # Update drag arrow (downwards from rocket top)
@@ -3787,7 +4022,6 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 drag_unit = 'lbf'
             else:
                 alt_disp = y_pos
-                alt_unit = 'm'
                 vel_disp = vel_a + (vel_b - vel_a) * frac
                 vel_unit = 'm/s'
                 mass_disp = mass_a + (mass_b - mass_a) * frac
@@ -3959,6 +4193,34 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.body_diameter_unit.setCurrentIndex(data.get('body_diameter_unit', 0))
             self.chute_height_input.setText(str(data.get('chute_height', '')))
             self.chute_height_unit.setCurrentIndex(data.get('chute_height_unit', 0))
+        try:
+            with open(os.path.join(os.path.dirname(__file__), 'user_settings.json'), 'w') as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
+    def load_inputs(self):
+        try:
+            with open(os.path.join(os.path.dirname(__file__), 'user_settings.json'), 'r') as f:
+                data = json.load(f)
+            self.mass_input.setText(str(data.get('mass', '')))
+            self.mass_unit.setCurrentIndex(data.get('mass_unit', 0))
+            self.cd_input.setText(str(data.get('cd', '')))
+            self.area_input.setText(str(data.get('area', '')))
+            self.area_unit.setCurrentIndex(data.get('area_unit', 0))
+            self.rho_input.setText(str(data.get('rho', '')))
+            self.rho_unit.setCurrentIndex(data.get('rho_unit', 0))
+            self.timestep_input.setText(str(data.get('timestep', '')))
+            self.timestep_unit.setCurrentIndex(data.get('timestep_unit', 0))
+            self.fin_count_input.setText(str(data.get('fin_count', '')))
+            self.fin_thickness_input.setText(str(data.get('fin_thickness', '')))
+            self.fin_thickness_unit.setCurrentIndex(data.get('fin_thickness_unit', 0))
+            self.fin_length_input.setText(str(data.get('fin_length', '')))
+            self.fin_length_unit.setCurrentIndex(data.get('fin_length_unit', 0))
+            self.body_diameter_input.setText(str(data.get('body_diameter', '')))
+            self.body_diameter_unit.setCurrentIndex(data.get('body_diameter_unit', 0))
+            self.chute_height_input.setText(str(data.get('chute_height', '')))
+            self.chute_height_unit.setCurrentIndex(data.get('chute_height_unit', 0))
             self.chute_size_input.setText(str(data.get('chute_size', '')))
             self.chute_size_unit.setCurrentIndex(data.get('chute_size_unit', 0))
             self.chute_cd_input.setText(str(data.get('chute_cd', '1.5')))
@@ -4020,6 +4282,302 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.rho_input.setText(f"{rho:.3f}")
         except Exception:
             pass
+
+    # Profile Management Methods
+    def get_profiles_dir(self):
+        """Get the directory where profiles are stored"""
+        profiles_dir = os.path.join(os.path.dirname(self.user_settings_file), 'profiles')
+        if not os.path.exists(profiles_dir):
+            os.makedirs(profiles_dir)
+        return profiles_dir
+
+    def get_current_configuration(self):
+        """Get current rocket configuration as a dictionary"""
+        config = {
+            'version': '1.0',
+            'name': 'Unnamed Profile',
+            'description': '',
+            'created': QtCore.QDateTime.currentDateTime().toString(),
+            'rocket_parameters': {
+                'mass': self.mass_input.text(),
+                'mass_unit': self.mass_unit.currentIndex(),
+                'cd': self.cd_input.text(),
+                'area': self.area_input.text(),
+                'area_unit': self.area_unit.currentIndex(),
+                'rho': self.rho_input.text(),
+                'rho_unit': self.rho_unit.currentIndex(),
+                'timestep': self.timestep_input.text(),
+                'timestep_unit': self.timestep_unit.currentIndex(),
+                'fin_count': self.fin_count_input.text(),
+                'fin_thickness': self.fin_thickness_input.text(),
+                'fin_thickness_unit': self.fin_thickness_unit.currentIndex(),
+                'fin_length': self.fin_length_input.text(),
+                'fin_length_unit': self.fin_length_unit.currentIndex(),
+                'body_diameter': self.body_diameter_input.text(),
+                'body_diameter_unit': self.body_diameter_unit.currentIndex(),
+                'chute_height': self.chute_height_input.text(),
+                'chute_height_unit': self.chute_height_unit.currentIndex(),
+                'chute_size': self.chute_size_input.text(),
+                'chute_size_unit': self.chute_size_unit.currentIndex(),
+                'chute_cd': self.chute_cd_input.text(),
+            },
+            'launch_conditions': {
+                'start_altitude': self.start_altitude_input.text(),
+                'temperature': self.temperature_input.text(),
+                'humidity': self.humidity_input.text(),
+            },
+            'stability_settings': {
+                'rocket_length': self.rocket_length_input.value(),
+                'center_of_mass': self.center_of_mass_input.value(),
+                'center_of_pressure': self.center_of_pressure_input.value(),
+                'launch_angle': self.launch_angle_input.value(),
+            },
+            'wind_settings': {
+                'wind_speed': self.wind_speed_input.value(),
+                'wind_direction': self.wind_direction_input.value(),
+            },
+            'thrust_curve_path': getattr(self, 'thrust_curve_path', None)
+        }
+        return config
+
+    def apply_configuration(self, config):
+        """Apply a configuration to the current inputs"""
+        try:
+            # Rocket parameters
+            rp = config.get('rocket_parameters', {})
+            self.mass_input.setText(rp.get('mass', ''))
+            self.mass_unit.setCurrentIndex(rp.get('mass_unit', 0))
+            self.cd_input.setText(rp.get('cd', ''))
+            self.area_input.setText(rp.get('area', ''))
+            self.area_unit.setCurrentIndex(rp.get('area_unit', 0))
+            self.rho_input.setText(rp.get('rho', ''))
+            self.rho_unit.setCurrentIndex(rp.get('rho_unit', 0))
+            self.timestep_input.setText(rp.get('timestep', ''))
+            self.timestep_unit.setCurrentIndex(rp.get('timestep_unit', 0))
+            self.fin_count_input.setText(rp.get('fin_count', ''))
+            self.fin_thickness_input.setText(rp.get('fin_thickness', ''))
+            self.fin_thickness_unit.setCurrentIndex(rp.get('fin_thickness_unit', 0))
+            self.fin_length_input.setText(rp.get('fin_length', ''))
+            self.fin_length_unit.setCurrentIndex(rp.get('fin_length_unit', 0))
+            self.body_diameter_input.setText(rp.get('body_diameter', ''))
+            self.body_diameter_unit.setCurrentIndex(rp.get('body_diameter_unit', 0))
+            self.chute_height_input.setText(rp.get('chute_height', ''))
+            self.chute_height_unit.setCurrentIndex(rp.get('chute_height_unit', 0))
+            self.chute_size_input.setText(rp.get('chute_size', ''))
+            self.chute_size_unit.setCurrentIndex(rp.get('chute_size_unit', 0))
+            self.chute_cd_input.setText(rp.get('chute_cd', ''))
+
+            # Launch conditions
+            lc = config.get('launch_conditions', {})
+            self.start_altitude_input.setText(lc.get('start_altitude', ''))
+            self.temperature_input.setText(lc.get('temperature', ''))
+            self.humidity_input.setText(lc.get('humidity', ''))
+
+            # Stability settings
+            ss = config.get('stability_settings', {})
+            self.rocket_length_input.setValue(ss.get('rocket_length', 1.0))
+            self.center_of_mass_input.setValue(ss.get('center_of_mass', 0.5))
+            self.center_of_pressure_input.setValue(ss.get('center_of_pressure', 0.7))
+            self.launch_angle_input.setValue(ss.get('launch_angle', 0.0))
+
+            # Wind settings
+            ws = config.get('wind_settings', {})
+            self.wind_speed_input.setValue(ws.get('wind_speed', 0.0))
+            self.wind_direction_input.setValue(ws.get('wind_direction', 0))
+
+            # Thrust curve
+            thrust_path = config.get('thrust_curve_path')
+            if thrust_path and os.path.exists(thrust_path):
+                self.thrust_curve_path = thrust_path
+                self.result_label.setText(f"Loaded profile thrust curve: {os.path.basename(thrust_path)}")
+
+            return True
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Profile Load Error", f"Error applying profile configuration: {str(e)}")
+            return False
+
+    def load_available_profiles(self):
+        """Load available profiles into the dropdown"""
+        self.profile_select.clear()
+        self.profile_select.addItem("Default", None)
+        
+        profiles_dir = self.get_profiles_dir()
+        try:
+            for filename in sorted(os.listdir(profiles_dir)):
+                if filename.endswith('.json'):
+                    profile_name = filename[:-5]  # Remove .json extension
+                    self.profile_select.addItem(profile_name, filename)
+        except OSError:
+            pass
+
+    def save_current_profile(self):
+        """Save current configuration as a new profile"""
+        profile_name, ok = QtWidgets.QInputDialog.getText(
+            self, 'Save Profile', 
+            'Enter a name for this rocket configuration profile:',
+            QtWidgets.QLineEdit.Normal, 
+            'My Rocket'
+        )
+        
+        if ok and profile_name.strip():
+            profile_name = profile_name.strip()
+            
+            # Get profile description
+            description, ok2 = QtWidgets.QInputDialog.getText(
+                self, 'Profile Description', 
+                'Enter a description (optional):',
+                QtWidgets.QLineEdit.Normal, 
+                ''
+            )
+            
+            config = self.get_current_configuration()
+            config['name'] = profile_name
+            config['description'] = description if ok2 else ''
+            
+            # Save to file
+            profiles_dir = self.get_profiles_dir()
+            # Sanitize filename
+            safe_name = "".join(c for c in profile_name if c.isalnum() or c in (' ', '-', '_')).strip()
+            filename = f"{safe_name}.json"
+            filepath = os.path.join(profiles_dir, filename)
+            
+            try:
+                with open(filepath, 'w') as f:
+                    json.dump(config, f, indent=2)
+                
+                # Reload dropdown and select new profile
+                self.load_available_profiles()
+                index = self.profile_select.findText(profile_name)
+                if index >= 0:
+                    self.profile_select.setCurrentIndex(index)
+                
+                QtWidgets.QMessageBox.information(self, "Profile Saved", f"Profile '{profile_name}' saved successfully!")
+                
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Save Error", f"Failed to save profile: {str(e)}")
+
+    def load_profile(self, profile_name):
+        """Load a profile by name"""
+        if not profile_name or profile_name == "Default":
+            return
+            
+        # Find the corresponding filename
+        filename = None
+        for i in range(self.profile_select.count()):
+            if self.profile_select.itemText(i) == profile_name:
+                filename = self.profile_select.itemData(i)
+                break
+        
+        if not filename:
+            return
+            
+        profiles_dir = self.get_profiles_dir()
+        filepath = os.path.join(profiles_dir, filename)
+        
+        try:
+            with open(filepath, 'r') as f:
+                config = json.load(f)
+            
+            if self.apply_configuration(config):
+                self.result_label.setText(f"Loaded profile: {profile_name}")
+                
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Load Error", f"Failed to load profile '{profile_name}': {str(e)}")
+
+    def delete_current_profile(self):
+        """Delete the currently selected profile"""
+        current_profile = self.profile_select.currentText()
+        if current_profile == "Default":
+            QtWidgets.QMessageBox.information(self, "Cannot Delete", "Cannot delete the default profile.")
+            return
+            
+        reply = QtWidgets.QMessageBox.question(
+            self, 'Delete Profile', 
+            f"Are you sure you want to delete the profile '{current_profile}'?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+        
+        if reply == QtWidgets.QMessageBox.Yes:
+            filename = self.profile_select.currentData()
+            if filename:
+                profiles_dir = self.get_profiles_dir()
+                filepath = os.path.join(profiles_dir, filename)
+                
+                try:
+                    os.remove(filepath)
+                    self.load_available_profiles()
+                    self.profile_select.setCurrentIndex(0)  # Select Default
+                    QtWidgets.QMessageBox.information(self, "Profile Deleted", f"Profile '{current_profile}' deleted successfully!")
+                except Exception as e:
+                    QtWidgets.QMessageBox.critical(self, "Delete Error", f"Failed to delete profile: {str(e)}")
+
+    def export_profile(self):
+        """Export current profile to a file"""
+        profile_name = self.profile_select.currentText()
+        if profile_name == "Default":
+            profile_name = "rocket_config"
+            
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export Profile", 
+            f"{profile_name}.json",
+            "JSON Files (*.json);;All Files (*)"
+        )
+        
+        if filename:
+            config = self.get_current_configuration()
+            try:
+                with open(filename, 'w') as f:
+                    json.dump(config, f, indent=2)
+                QtWidgets.QMessageBox.information(self, "Export Success", f"Profile exported to {filename}")
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Export Error", f"Failed to export profile: {str(e)}")
+
+    def import_profile(self):
+        """Import a profile from a file"""
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Import Profile", 
+            "",
+            "JSON Files (*.json);;All Files (*)"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'r') as f:
+                    config = json.load(f)
+                
+                # Ask for new profile name
+                import_name = os.path.splitext(os.path.basename(filename))[0]
+                profile_name, ok = QtWidgets.QInputDialog.getText(
+                    self, 'Import Profile', 
+                    'Enter name for imported profile:',
+                    QtWidgets.QLineEdit.Normal, 
+                    import_name
+                )
+                
+                if ok and profile_name.strip():
+                    config['name'] = profile_name.strip()
+                    
+                    # Save to profiles directory
+                    profiles_dir = self.get_profiles_dir()
+                    safe_name = "".join(c for c in profile_name if c.isalnum() or c in (' ', '-', '_')).strip()
+                    new_filename = f"{safe_name}.json"
+                    new_filepath = os.path.join(profiles_dir, new_filename)
+                    
+                    with open(new_filepath, 'w') as f:
+                        json.dump(config, f, indent=2)
+                    
+                    # Reload dropdown and apply
+                    self.load_available_profiles()
+                    index = self.profile_select.findText(profile_name)
+                    if index >= 0:
+                        self.profile_select.setCurrentIndex(index)
+                        self.apply_configuration(config)
+                    
+                    QtWidgets.QMessageBox.information(self, "Import Success", f"Profile '{profile_name}' imported successfully!")
+                    
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Import Error", f"Failed to import profile: {str(e)}")
 
 
 if __name__ == "__main__":

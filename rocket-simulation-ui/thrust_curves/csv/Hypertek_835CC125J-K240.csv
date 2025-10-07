@@ -1,8 +1,8 @@
-"motor:","Hypertek 835CC125J-K240"
-"contributor:","John Coker"
-"details:","https://www.thrustcurve.org/simfiles/5f4294d20002e900000000eb/"
-
-"Time (s)","Thrust (N)"
+motor:,Hypertek 835CC125J-K240
+contributor:,John Coker
+details:,https://www.thrustcurve.org/simfiles/5f4294d20002e900000000eb/
+"1,807g",789g
+Time (s),Thrust (N)
 0.131,278.007
 0.396,329.552
 0.66,338.024

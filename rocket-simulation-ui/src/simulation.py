@@ -88,37 +88,88 @@ def run_simulation(m, Cd, A, rho, thrust_curve_path=None, chute_height=None, chu
     deploy_start = None
     deploy_end = None
 
+    # Initialize current_Cd and current_A to avoid undefined reference
+    current_Cd = Cd
+    current_A = A
+
     deployment_stats = None
+    # Smoothing state
+    last_F_drag = 0.0
+    # --- Inflation model parameters (override via kwargs) ---
+    inflation_k = kwargs.get('chute_inflation_k', 2.2)          # Base inflation rate coefficient
+    q_ref       = kwargs.get('chute_q_ref', 25.0)               # Reference dynamic pressure (Pa effective) moderates early growth
+    reef_initial_fraction = kwargs.get('reef_initial_fraction', 0.30)
+    reef_hold_time       = kwargs.get('reef_hold_time', 0.35)
+    reef_release_tau     = kwargs.get('reef_release_tau', 0.9)
+    sqrt_cd_profile      = kwargs.get('chute_cd_sqrt_profile', True)
+    smoothing_alpha      = kwargs.get('drag_smoothing_alpha', 0.28)
+    limit_drag_spikes    = kwargs.get('limit_drag_spikes', True)
+    drag_limit_base      = kwargs.get('drag_limit_base', 55.0)
+    # Fill state (0..1)
+    chute_fill = 0.0
     try:
         while True:
             F = thrust_func_fixed(time) if time <= burn_time else 0.0
-            # Deploy parachute if falling and below chute_height (if provided), else default to 300m
+            # Deploy parachute height threshold (default 300 m if not specified)
             deploy_height = chute_height if chute_height is not None else 300
-            if not chute_deployed and velocity < 0 and altitude < deploy_height:
+            # --- Single deployment trigger ---
+            if (not chute_deployed and velocity < -0.5 and altitude < deploy_height):
                 chute_deployed = True
                 deploy_start = time
-                deploy_end = time + deploy_period
-                # Record deployment stats
+                raw_deploy_end = time + deploy_period  # still track nominal period for reference
+                deploy_end = round(raw_deploy_end / TimeI) * TimeI
+                if deploy_end <= deploy_start:
+                    deploy_end = deploy_start + TimeI
                 deployment_stats = {
                     'deployment_time': time,
                     'force_at_deployment': drag_force(velocity, current_Cd, current_A)
                 }
-            # Gradually change Cd and area from normal to parachute values over random deployment period
-            if chute_deployed and deploy_start is not None and deploy_start <= time < deploy_end:
-                deploy_fraction = (time - deploy_start) / (deploy_end - deploy_start)
-                target_Cd = chute_cd if chute_cd is not None else Cd
-                target_A = chute_size if chute_size is not None else A
-                current_Cd = Cd + deploy_fraction * (target_Cd - Cd)
-                current_A = A + deploy_fraction * (target_A - A)
-            elif chute_deployed and deploy_end is not None and time >= deploy_end:
-                current_Cd = chute_cd if chute_cd is not None else Cd
-                current_A = chute_size if chute_size is not None else A
+
+            target_Cd_full = chute_cd if chute_cd is not None else Cd
+            target_A_full  = chute_size if chute_size is not None else A
+
+            # --- Inflation ODE (only after trigger) ---
+            if chute_deployed and deploy_start is not None:
+                q_dyn = 0.5 * rho * velocity**2  # dynamic pressure (always >=0)
+                q_factor = q_dyn / (q_dyn + q_ref) if (q_dyn + q_ref) > 0 else 0.0
+                d_fill = inflation_k * (1 - chute_fill) * q_factor * TimeI
+                chute_fill = np.clip(chute_fill + d_fill, 0.0, 1.0)
+                t_since = time - deploy_start
+                if t_since < reef_hold_time:
+                    cap = reef_initial_fraction
+                else:
+                    cap = reef_initial_fraction + (1 - reef_initial_fraction) * (1 - np.exp(-(t_since - reef_hold_time)/max(reef_release_tau,1e-6)))
+                chute_fill = min(chute_fill, cap)
             else:
-                current_Cd = Cd
-                current_A = A
-            # Always use current_Cd and current_A for drag, smooth transition
-            F_drag = drag_force(velocity, current_Cd, current_A)
-            a = (F - np.sign(velocity) * F_drag) / m - g
+                chute_fill = 0.0
+
+            # Effective area & Cd mapping
+            current_A = A + chute_fill * (target_A_full - A)
+            cd_frac = np.sqrt(chute_fill) if (sqrt_cd_profile and chute_fill > 0) else chute_fill
+            current_Cd = Cd + cd_frac * (target_Cd_full - Cd)
+
+            # Raw & smoothed drag
+            F_drag_raw = drag_force(velocity, current_Cd, current_A)
+            F_drag = (1 - smoothing_alpha) * last_F_drag + smoothing_alpha * F_drag_raw
+            last_F_drag = F_drag
+
+            drag_limit_applied = False
+            if limit_drag_spikes:
+                # Smooth compression instead of hard clamp
+                max_drag_accel = drag_limit_base * (1 + min(abs(velocity) / 50.0, 3.0))
+                drag_accel = abs(F_drag) / max(m, 1e-6)
+                if drag_accel > max_drag_accel:
+                    # Compress overshoot instead of clipping: keep 30% of the excess
+                    allowed = max_drag_accel * m
+                    excess = F_drag - allowed
+                    F_drag = allowed + 0.30 * excess
+                    drag_limit_applied = True
+            else:
+                max_drag_accel = None
+                drag_accel = abs(F_drag) / max(m, 1e-6)
+
+            # Net acceleration (drag always opposes motion)
+            a = (F - F_drag * np.sign(velocity)) / m - g
             # Calculate mdot (mass flow rate) using proper specific impulse equation
             mdot = F / (Isp * g0) if F > 0 else 0
             m -= mdot * TimeI  # Update mass
@@ -135,6 +186,13 @@ def run_simulation(m, Cd, A, rho, thrust_curve_path=None, chute_height=None, chu
                 'acceleration': a,
                 'thrust': F,
                 'drag': F_drag,
+                'drag_raw': F_drag_raw,
+                'drag_limit_applied': drag_limit_applied,
+                'max_drag_accel': max_drag_accel,
+                'drag_accel': drag_accel,
+                'Cd_eff': current_Cd,
+                'A_eff': current_A,
+                'chute_fill': chute_fill,
                 'chute_deployed': chute_deployed,
                 'mass': m,
                 'mdot': mdot

@@ -1,8 +1,8 @@
-"motor:","Hypertek 1685CCRGLFX-L610FX"
-"contributor:","John Coker"
-"details:","https://www.thrustcurve.org/simfiles/5f4294d20002e900000000c3/"
-
-"Time (s)","Thrust (N)"
+motor:,Hypertek 1685CCRGLFX-L610FX
+contributor:,John Coker
+details:,https://www.thrustcurve.org/simfiles/5f4294d20002e900000000c3/
+3951g,1603g
+Time (s),Thrust (N)
 0.11,850.823
 0.333,837.7
 0.556,775.061
