@@ -1,4 +1,24 @@
-def run_simulation(m, Cd, A, rho, thrust_curve_path=None, chute_height=None, chute_size=None, time_step=None, chute_deploy_start=None, chute_cd=None, **kwargs):
+def run_simulation(
+    m,
+    Cd,
+    A,
+    rho,
+    thrust_curve_path=None,
+    chute_height=None,
+    chute_size=None,
+    time_step=None,
+    chute_deploy_start=None,
+    chute_cd=None,
+    chute_deploy_duration=3.0,
+    atmosphere='constant',
+    variable_cd_model=False,
+    chute_target_descent_rate=None,
+    rocket_ref_length=None,
+    drag_cap=400.0,
+    drag_cap_mode='soft',
+    drag_cap_soft_threshold=0.85,
+    **kwargs
+):
     """
     Rocket simulation with organized givens and constants.
     
@@ -22,12 +42,22 @@ def run_simulation(m, Cd, A, rho, thrust_curve_path=None, chute_height=None, chu
         Isp: Specific impulse, estimated from total impulse and g0
         total_impulse:  from thrust curve
 
+    Additional Optional Parameters:
+        atmosphere: 'constant' or 'isa' for a simple International Standard Atmosphere density variation.
+        variable_cd_model: If True, apply a simplistic Mach-dependent Cd bump near Mach 1 for the rocket body.
+        chute_target_descent_rate: If provided (m/s) and chute_size is None, compute parachute area to target that terminal descent rate at deployment.
+        rocket_ref_length: Optional reference length (m) for Reynolds/Mach related models (currently only Mach bump uses velocity & speed of sound).
+
     State Variables (updated during simulation):
-        time: Current simulation time
-        velocity: Current velocity
-        altitude: Current altitude
-        mass: Current mass (decreases with fuel burn)
-        chute_deployed: Boolean for parachute deployment
+        time, velocity, altitude, mass, chute_deployed
+
+    Diagnostics Added:
+        rho_local: Local air density (kg/m^3)
+        q: Dynamic pressure (Pa)
+        Mach: |v| / a (speed of sound)
+        terminal_v_body: Instantaneous terminal velocity for body-only configuration
+        terminal_v_chute: Instantaneous terminal velocity with current effective Cd*A (after chute deploy)
+        Cd_body_eff: Body Cd after Mach adjustment (if enabled)
     """
     import numpy as np
     from scipy.interpolate import interp1d
@@ -79,125 +109,221 @@ def run_simulation(m, Cd, A, rho, thrust_curve_path=None, chute_height=None, chu
     total_impulse = calculate_total_impulse(thrust_data)
     Isp = total_impulse/g0  # Estimate Isp from total impulse and g0
 
-    def drag_force(v, Cd_val, A_val):
-        return 0.5 * rho * v**2 * Cd_val * A_val
+    # --- Atmosphere / Aerodynamics Helpers ---
+    rho0 = rho  # treat provided rho as sea-level density when atmosphere != constant
+    T0 = 288.15  # K
+    L = 0.0065   # K/m lapse (troposphere)
+    R = 287.05287  # J/(kg*K)
+    gamma = 1.4
 
-    import random
+    def isa_density(alt):
+        """Very simple ISA up to 11 km; falls back to exponential beyond."""
+        if alt < 0:
+            alt = 0
+        if alt <= 11000:  # troposphere
+            T = T0 - L * alt
+            p = 101325 * (T / T0) ** (g / (R * L))
+            return p / (R * T)
+        # Simple scale-height approximation above 11 km
+        scale_height = 7000.0
+        return rho0 * np.exp(-(alt - 11000) / scale_height) * (isa_density(11000) / rho0)
+
+    def local_density(alt):
+        if atmosphere == 'isa':
+            return isa_density(alt)
+        return rho0
+
+    def speed_of_sound(alt):
+        if atmosphere == 'isa':
+            if alt < 0:
+                alt = 0
+            if alt <= 11000:
+                T = T0 - L * alt
+            else:
+                # Hold temperature constant above tropopause for this simplified model
+                T = T0 - L * 11000
+        else:
+            T = T0
+        return (gamma * R * T) ** 0.5
+
+    def adjust_body_cd_for_mach(cd_body, mach):
+        """Simple Mach bump: +15% peak at Mach 1, taper from 0.8–1.2."""
+        if not variable_cd_model:
+            return cd_body
+        if mach < 0.8 or mach > 1.2:
+            return cd_body
+        # triangular bump centered at 1.0
+        if mach <= 1.0:
+            factor = 1 + 0.15 * (mach - 0.8) / (0.2)
+        else:
+            factor = 1 + 0.15 * (1.2 - mach) / (0.2)
+        return cd_body * factor
+
     chute_deployed = False
-    deploy_period = random.uniform(0.5, 2.5)  # random deployment period in seconds
+    # Fixed deployment duration (seconds) replacing previous random period
+    deploy_period = chute_deploy_duration if chute_deploy_duration and chute_deploy_duration > 0 else 3.0
     deploy_start = None
     deploy_end = None
-
-    # Initialize current_Cd and current_A to avoid undefined reference
+    # Initialize effective coefficients BEFORE first use
     current_Cd = Cd
     current_A = A
-
+    last_signed_drag = 0.0
+    drag_smoothing_alpha = 0.30
+    sim_version = 2
     deployment_stats = None
-    # Smoothing state
-    last_F_drag = 0.0
-    # --- Inflation model parameters (override via kwargs) ---
-    inflation_k = kwargs.get('chute_inflation_k', 2.2)          # Base inflation rate coefficient
-    q_ref       = kwargs.get('chute_q_ref', 25.0)               # Reference dynamic pressure (Pa effective) moderates early growth
-    reef_initial_fraction = kwargs.get('reef_initial_fraction', 0.30)
-    reef_hold_time       = kwargs.get('reef_hold_time', 0.35)
-    reef_release_tau     = kwargs.get('reef_release_tau', 0.9)
-    sqrt_cd_profile      = kwargs.get('chute_cd_sqrt_profile', True)
-    smoothing_alpha      = kwargs.get('drag_smoothing_alpha', 0.28)
-    limit_drag_spikes    = kwargs.get('limit_drag_spikes', True)
-    drag_limit_base      = kwargs.get('drag_limit_base', 55.0)
-    # Fill state (0..1)
-    chute_fill = 0.0
+
     try:
         while True:
             F = thrust_func_fixed(time) if time <= burn_time else 0.0
-            # Deploy parachute height threshold (default 300 m if not specified)
+
+            # Local atmospheric properties
+            rho_local = local_density(altitude)
+            a_sound = speed_of_sound(altitude)
+            speed = abs(velocity)
+            Mach = speed / a_sound if a_sound > 0 else 0.0
+
+            # Body Cd Mach adjustment (pre-chute or baseline portion)
+            Cd_body_eff = adjust_body_cd_for_mach(Cd, Mach)
+
+            # Deployment trigger (descending & below height)
             deploy_height = chute_height if chute_height is not None else 300
-            # --- Single deployment trigger ---
-            if (not chute_deployed and velocity < -0.5 and altitude < deploy_height):
+            if not chute_deployed and velocity < -0.5 and altitude < deploy_height:
                 chute_deployed = True
                 deploy_start = time
-                raw_deploy_end = time + deploy_period  # still track nominal period for reference
-                deploy_end = round(raw_deploy_end / TimeI) * TimeI
-                if deploy_end <= deploy_start:
-                    deploy_end = deploy_start + TimeI
+                deploy_end = deploy_start + deploy_period  # no rounding; allow smooth fraction
                 deployment_stats = {
                     'deployment_time': time,
-                    'force_at_deployment': drag_force(velocity, current_Cd, current_A)
+                    'force_at_deployment': 0.0
                 }
 
-            target_Cd_full = chute_cd if chute_cd is not None else Cd
-            target_A_full  = chute_size if chute_size is not None else A
-
-            # --- Inflation ODE (only after trigger) ---
+            # Simple linear inflation (can be replaced with ODE model if desired)
+            chute_fill = 0.0
+            target_Cd = chute_cd if chute_cd is not None else (chute_cd or 1.8)
+            target_A = chute_size if chute_size is not None else A
             if chute_deployed and deploy_start is not None:
-                q_dyn = 0.5 * rho * velocity**2  # dynamic pressure (always >=0)
-                q_factor = q_dyn / (q_dyn + q_ref) if (q_dyn + q_ref) > 0 else 0.0
-                d_fill = inflation_k * (1 - chute_fill) * q_factor * TimeI
-                chute_fill = np.clip(chute_fill + d_fill, 0.0, 1.0)
-                t_since = time - deploy_start
-                if t_since < reef_hold_time:
-                    cap = reef_initial_fraction
+                if time < deploy_end:
+                    frac = (time - deploy_start) / max((deploy_end - deploy_start), 1e-9)
                 else:
-                    cap = reef_initial_fraction + (1 - reef_initial_fraction) * (1 - np.exp(-(t_since - reef_hold_time)/max(reef_release_tau,1e-6)))
-                chute_fill = min(chute_fill, cap)
+                    frac = 1.0
+                frac = np.clip(frac, 0.0, 1.0)
+                # If chute_size not provided but a target descent rate is, compute required area at deployment time
+                if chute_size is None and chute_target_descent_rate and chute_target_descent_rate > 0:
+                    target_A = (2 * m * g) / max(rho_local * target_Cd * chute_target_descent_rate**2, 1e-9)
+                # Ease-in curve for softer onset (cubic with small bias)
+                # Parabolic (quadratic) deployment curve: smooth increase over fixed duration
+                # y = (t/T)^2 gives a parabolic ramp starting gently (lower initial opening shock)
+                chute_fill = frac**2
+                current_Cd = Cd_body_eff  # body Cd unaffected directly by chute
+                current_A = A              # keep body reference area for legacy fields
             else:
-                chute_fill = 0.0
+                current_Cd = Cd_body_eff
+                current_A = A
 
-            # Effective area & Cd mapping
-            current_A = A + chute_fill * (target_A_full - A)
-            cd_frac = np.sqrt(chute_fill) if (sqrt_cd_profile and chute_fill > 0) else chute_fill
-            current_Cd = Cd + cd_frac * (target_Cd_full - Cd)
-
-            # Raw & smoothed drag
-            F_drag_raw = drag_force(velocity, current_Cd, current_A)
-            F_drag = (1 - smoothing_alpha) * last_F_drag + smoothing_alpha * F_drag_raw
-            last_F_drag = F_drag
-
-            drag_limit_applied = False
-            if limit_drag_spikes:
-                # Smooth compression instead of hard clamp
-                max_drag_accel = drag_limit_base * (1 + min(abs(velocity) / 50.0, 3.0))
-                drag_accel = abs(F_drag) / max(m, 1e-6)
-                if drag_accel > max_drag_accel:
-                    # Compress overshoot instead of clipping: keep 30% of the excess
-                    allowed = max_drag_accel * m
-                    excess = F_drag - allowed
-                    F_drag = allowed + 0.30 * excess
-                    drag_limit_applied = True
+            # Signed drag force (opposes velocity)
+            # --- Drag decomposition: body + (optional) parachute ---
+            if velocity != 0:
+                rocket_drag_signed_raw = -0.5 * rho_local * Cd_body_eff * A * velocity * abs(velocity)
+                chute_drag_signed_raw = 0.0
+                if chute_deployed:
+                    chute_drag_signed_raw = -0.5 * rho_local * target_Cd * (target_A * chute_fill) * velocity * abs(velocity)
+                raw_signed_drag = rocket_drag_signed_raw + chute_drag_signed_raw
             else:
-                max_drag_accel = None
-                drag_accel = abs(F_drag) / max(m, 1e-6)
+                rocket_drag_signed_raw = 0.0
+                chute_drag_signed_raw = 0.0
+                raw_signed_drag = 0.0
+            signed_drag_unsmoothed = raw_signed_drag
+            signed_drag_smoothed = (1 - drag_smoothing_alpha) * last_signed_drag + drag_smoothing_alpha * raw_signed_drag
+            drag_cap_applied = False
+            signed_drag = signed_drag_smoothed
+            drag_cap_method = None
+            if drag_cap and drag_cap > 0:
+                if drag_cap_mode == 'hard':
+                    drag_cap_method = 'hard'
+                    if abs(signed_drag) > drag_cap:
+                        signed_drag = -drag_cap if signed_drag < 0 else drag_cap
+                        drag_cap_applied = True
+                else:  # soft mode (default)
+                    drag_cap_method = 'soft'
+                    # Keep linear region up to threshold * cap, then ease into cap with smoothstep.
+                    thr = max(0.0, min(0.9999, drag_cap_soft_threshold)) * drag_cap
+                    mag = abs(signed_drag)
+                    sign = 1 if signed_drag >= 0 else -1
+                    if mag > thr:
+                        # normalized progress into the capping region (0 to 1+)
+                        span = drag_cap - thr if drag_cap > thr else drag_cap * 0.0001
+                        r = (mag - thr) / span
+                        if r > 0:
+                            # cubic smoothstep clamp to 1
+                            r_clamped = 1.0 if r >= 1 else (3*r*r - 2*r*r*r)
+                            mag_new = thr + (drag_cap - thr) * r_clamped
+                            if mag_new > drag_cap:
+                                mag_new = drag_cap
+                            if mag_new < mag:  # only reduce magnitude (monotonic limiting)
+                                drag_cap_applied = True
+                                mag = mag_new
+                        signed_drag = sign * mag
+            last_signed_drag = signed_drag
 
-            # Net acceleration (drag always opposes motion)
-            a = (F - F_drag * np.sign(velocity)) / m - g
-            # Calculate mdot (mass flow rate) using proper specific impulse equation
+            # Net acceleration (positive upward)
+            a = (F + signed_drag) / m - g
             mdot = F / (Isp * g0) if F > 0 else 0
-            m -= mdot * TimeI  # Update mass
+            m -= mdot * TimeI
             velocity += a * TimeI
             altitude += velocity * TimeI
             time += TimeI
             if altitude < 0:
                 altitude = 0
-                velocity = 0  # Reset velocity to zero when hitting ground to avoid infinite loop
+                velocity = 0
+            # Dynamic pressure & terminal velocities
+            q = 0.5 * rho_local * speed**2
+            try:
+                terminal_v_body = (2 * m * g / (rho_local * Cd_body_eff * A)) ** 0.5
+            except Exception:
+                terminal_v_body = None
+            try:
+                # Use combined effective drag area for current configuration (body + filled chute area * chute Cd)
+                combined_CdA = (Cd_body_eff * A) + (target_Cd * target_A * chute_fill)
+                terminal_v_current = (2 * m * g / max(rho_local * combined_CdA, 1e-9)) ** 0.5 if combined_CdA > 0 else None
+            except Exception:
+                terminal_v_current = None
+            try:
+                ballistic_coeff_body = m / (Cd_body_eff * A)
+            except Exception:
+                ballistic_coeff_body = None
+            try:
+                ballistic_coeff_current = m / max(combined_CdA, 1e-9)
+            except Exception:
+                ballistic_coeff_current = None
             results.append({
                 'time': time,
                 'altitude': altitude,
                 'velocity': velocity,
                 'acceleration': a,
                 'thrust': F,
-                'drag': F_drag,
-                'drag_raw': F_drag_raw,
-                'drag_limit_applied': drag_limit_applied,
-                'max_drag_accel': max_drag_accel,
-                'drag_accel': drag_accel,
+                'drag': abs(signed_drag),          # capped magnitude
+                'drag_signed': signed_drag,        # capped/limited signed drag actually used in dynamics
+                'drag_raw_signed': raw_signed_drag,
+                'drag_signed_uncapped': signed_drag_unsmoothed,  # pre-cap smoothed value
+                'drag_cap_applied': drag_cap_applied,
+                'drag_cap_method': drag_cap_method,
                 'Cd_eff': current_Cd,
                 'A_eff': current_A,
-                'chute_fill': chute_fill,
                 'chute_deployed': chute_deployed,
                 'mass': m,
-                'mdot': mdot
+                'mdot': mdot,
+                'sim_version': sim_version,
+                'rho_local': rho_local,
+                'q': q,
+                'Mach': Mach,
+                'Cd_body_eff': Cd_body_eff,
+                'terminal_v_body': terminal_v_body,
+                'terminal_v_current': terminal_v_current,
+                'rocket_drag_signed_raw': rocket_drag_signed_raw,
+                'chute_drag_signed_raw': chute_drag_signed_raw,
+                'chute_fill': chute_fill,
+                'ballistic_coeff_body': ballistic_coeff_body,
+                'ballistic_coeff_current': ballistic_coeff_current
             })
-            # Use a small epsilon to avoid floating point issues
             if altitude == 0 and velocity <= 0:
                 break
         impulse = calculate_total_impulse(thrust_data)

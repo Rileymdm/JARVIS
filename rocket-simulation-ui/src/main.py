@@ -399,7 +399,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 background-color: {theme['colors']['secondary_bg']};
                 border: 1px solid {theme['colors']['accent']};
                 border-radius: 4px;
-                padding: 8px 16px;
+                padding: 6px;
                 color: {theme['colors']['primary_text']};
             }}
 
@@ -1702,10 +1702,10 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 net_force = current_thrust - drag_force - (mass * g)
                 acceleration = net_force / mass
                 
-                # Significantly limit max acceleration to avoid unrealistic spikes
-                max_total_accel = 100.0  # m/s²
-                if abs(acceleration) > max_total_accel:
-                    acceleration = np.sign(acceleration) * max_total_accel
+                # Add instability
+                if not stable:
+                    wobble = 0.3 * math.sin(t * 8) * (1 + t * 0.05)
+                    acceleration += wobble
                 
                 # Update motion
                 velocity += acceleration * dt
@@ -2054,6 +2054,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
         except (ValueError, IndexError):
             # If header parsing fails, continue with just thrust data
             pass
+            
+        # Store motor info for later use
+        if hasattr(self, 'current_motor_info'):
+            self.current_motor_info.update(motor_info)
+        else:
+            self.current_motor_info = motor_info
             
         i += 1  # Skip header line
         
@@ -2682,9 +2688,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 widget.led.setStyleSheet("""
                     color: #00FF41;
                     font-size: 14px;
-                    font-weight: bold;
                     background: rgba(0, 255, 65, 0.2);
                     border-radius: 8px;
+                    border: 1px solid #00FF41;
                 """)
                 widget.status_text.setStyleSheet("""
                     font-size: 8px;
@@ -2739,25 +2745,23 @@ class RocketSimulationUI(QtWidgets.QWidget):
             color: {color}; 
             font-weight: bold;
             text-transform: uppercase;
+            letter-spacing: 1px;
         """)
         
         # Value with larger, prominent display
-        value_text = f"{value} {unit}" if unit else value
-        value_widget = QtWidgets.QLabel(value_text)
+        value_widget = QtWidgets.QLabel(value)
         value_widget.setAlignment(QtCore.Qt.AlignCenter)
-        value_widget.setStyleSheet(f"""
+        value_widget.setStyleSheet("""
             font-size: 16px; 
             font-weight: bold; 
-            color: {color};
-            font-family: 'Consolas', 'Monaco', monospace;
+            color: #2C3E50;
             padding: 4px;
-            border-bottom: 1px solid {color};
         """)
         
         layout.addWidget(label_widget)
         layout.addWidget(value_widget)
         
-        # Store references for updates
+        # Store value widget for updates
         widget.value_label = value_widget
         widget.gauge_color = color
         
@@ -2808,7 +2812,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         layout.addLayout(status_layout)
         layout.addWidget(text)
         
-        # Store references for updates
+        # Store circle for updates
         widget.status_circle = circle
         widget.is_active = active
         
@@ -2845,8 +2849,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 
                 # Calculate drag force (approximation)
                 try:
-                    _, Cd, A, rho, _, _, _, _, _, chute_size, _, _ = self.get_inputs_for_simulation()
-                    drag_force = 0.5 * rho * (velocity ** 2) * Cd * A if velocity > 0 else 0
+                    _, Cd, A, rho, _, _, _, _, _, _, _, _ = self.get_inputs_for_simulation()
+                    drag_force = 0.5 * rho * (velocity ** 2) * Cd * A if velocity > 0 else 0.0
                 except:
                     drag_force = 0.0
                 
@@ -2927,7 +2931,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
                         chute_cd = 1.5  # Typical parachute drag coefficient
                         _, _, _, _, _, _, _, _, _, chute_size, _, _ = self.get_inputs_for_simulation()
                         if chute_size and chute_size > 0:
-                            chute_drag_force = 0.5 * rho * (velocity ** 2) * chute_cd * chute_size if velocity != 0 else 0.0
+                            chute_open_factor = getattr(self, 'chute_open_factor', 1.0)
+                            effective_chute_area = chute_size * chute_open_factor
+                            chute_drag_force = 0.5 * rho * (velocity ** 2) * chute_cd * effective_chute_area if velocity != 0 else 0.0
                             chute_drag_force = abs(chute_drag_force)
                     except:
                         chute_drag_force = 0.0
@@ -3372,7 +3378,6 @@ class RocketSimulationUI(QtWidgets.QWidget):
         try:
             if (not self.apogee_marked) and (self.launch_prev_velocity > 0) and (self.launch_velocity <= 0) and (self.launch_altitude > 0.5):
                 self.apogee_marked = True
-               
                 self.apogee_pos = (self.launch_x_pos, self.launch_altitude)
                 self.apogee_flash_frames = 30
         except Exception:
@@ -3518,16 +3523,15 @@ class RocketSimulationUI(QtWidgets.QWidget):
             # Thrust
             max_thrust = max(thrusts) if thrusts else 1000
             t_scale = 0.4 * (current_thrust / max_thrust) if max_thrust > 0 else 0
-            ax.arrow(x_pos + arrow_x_offset, y_pos, 0, t_scale,
-                     head_width=0.06, head_length=0.08, fc='green', ec='green', alpha=0.8, zorder=7)
+            ax.arrow(x_pos, y_pos, u_forward[0]*t_scale, u_forward[1]*t_scale, head_width=0.06, head_length=0.08, fc='green', ec='green', alpha=0.8, zorder=7)
             # Drag opposite velocity
             if v_total > 1e-3:
                 d_dir = (-self.launch_x_vel / v_total, -self.launch_velocity / v_total)
                 d_scale = 0.4 * min(1.0, v_total / 50.0)
-                ax.arrow(x_pos + arrow_x_offset, y_pos, d_dir[0]*d_scale, d_dir[1]*d_scale, head_width=0.06, head_length=0.08, fc='red', ec='red', alpha=0.8, zorder=7)
+                ax.arrow(x_pos, y_pos, d_dir[0]*d_scale, d_dir[1]*d_scale, head_width=0.06, head_length=0.08, fc='red', ec='red', alpha=0.8, zorder=7)
             # Gravity
             g_len = 0.3
-            ax.arrow(x_pos + arrow_x_offset, y_pos, 0, -g_len, head_width=0.06, head_length=0.08, fc='blue', ec='blue', alpha=0.8, zorder=7)
+            ax.arrow(x_pos, y_pos, 0, -g_len, head_width=0.06, head_length=0.08, fc='blue', ec='blue', alpha=0.8, zorder=7)
 
         # Apogee flash marker
         if self.apogee_flash_frames and self.apogee_pos:
@@ -3786,6 +3790,29 @@ class RocketSimulationUI(QtWidgets.QWidget):
             max_mach_idx = machs.index(max_mach)
             max_mach_time = results[max_mach_idx]['time']
 
+            vel_unit = 'm/s'
+            alt_unit = 'm'
+            thrust_unit = 'N'
+            drag_unit = 'N'
+            mass_unit = 'kg'
+            if self.unit_select.currentIndex() == 1:
+                max_vel_disp = max_vel * 3.28084
+                vel_unit = 'ft/s'
+                max_alt_disp = max_alt * 3.28084
+                alt_unit = 'ft'
+                max_thrust_disp = max_thrust * 0.224809
+                thrust_unit = 'lbf'
+                max_drag_disp = max_drag * 0.224809
+                drag_unit = 'lbf'
+                max_mass_disp = max_mass * 2.20462
+                mass_unit = 'lb'
+            else:
+                max_vel_disp = max_vel
+                max_alt_disp = max_alt
+                max_thrust_disp = max_thrust
+                max_drag_disp = max_drag
+                max_mass_disp = max_mass
+
             # Dragstrip-style stat: show all max times in a single line
             dragstrip = (
                 f"[Max Times] Apogee: {max_alt_time:.2f}s | Velocity: {max_vel_time:.2f}s | Mach: {max_mach_time:.2f}s | Thrust: {max_thrust_time:.2f}s | Drag: {max_drag_time:.2f}s | Mass: {max_mass_time:.2f}s"
@@ -3991,8 +4018,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             thrust_b = result_b['thrust']
             drag_a = result_a['drag']
             drag_b = result_b['drag']
-            thrust_val = (thrust_a + (thrust_b - thrust_a) * frac) / max_thrust if max_thrust > 0 else 0
-            drag_val = (drag_a + (drag_b - drag_a) * frac) / max_drag if max_drag > 0 else 0
+            thrust_val = (thrust_a + (thrust_b - thrust_a) * frac) / max_thrust if max_thrust else 0
+            drag_val = (drag_a + (drag_b - drag_a) * frac) / max_drag if max_drag else 0
             # Update thrust arrow (upwards from rocket base)
             thrust_line.set_data([x_pos + arrow_x_offset, x_pos + arrow_x_offset], [y_pos, y_pos + thrust_val * 0.2])
             # Update drag arrow (downwards from rocket top)
@@ -4022,6 +4049,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 drag_unit = 'lbf'
             else:
                 alt_disp = y_pos
+                alt_unit = 'm'
                 vel_disp = vel_a + (vel_b - vel_a) * frac
                 vel_unit = 'm/s'
                 mass_disp = mass_a + (mass_b - mass_a) * frac
@@ -4165,34 +4193,6 @@ class RocketSimulationUI(QtWidgets.QWidget):
             'temperature': self.temperature_input.text(),
             'humidity': self.humidity_input.text(),
         }
-        try:
-            with open(os.path.join(os.path.dirname(__file__), 'user_settings.json'), 'w') as f:
-                json.dump(data, f)
-        except Exception:
-            pass
-
-    def load_inputs(self):
-        try:
-            with open(os.path.join(os.path.dirname(__file__), 'user_settings.json'), 'r') as f:
-                data = json.load(f)
-            self.mass_input.setText(str(data.get('mass', '')))
-            self.mass_unit.setCurrentIndex(data.get('mass_unit', 0))
-            self.cd_input.setText(str(data.get('cd', '')))
-            self.area_input.setText(str(data.get('area', '')))
-            self.area_unit.setCurrentIndex(data.get('area_unit', 0))
-            self.rho_input.setText(str(data.get('rho', '')))
-            self.rho_unit.setCurrentIndex(data.get('rho_unit', 0))
-            self.timestep_input.setText(str(data.get('timestep', '')))
-            self.timestep_unit.setCurrentIndex(data.get('timestep_unit', 0))
-            self.fin_count_input.setText(str(data.get('fin_count', '')))
-            self.fin_thickness_input.setText(str(data.get('fin_thickness', '')))
-            self.fin_thickness_unit.setCurrentIndex(data.get('fin_thickness_unit', 0))
-            self.fin_length_input.setText(str(data.get('fin_length', '')))
-            self.fin_length_unit.setCurrentIndex(data.get('fin_length_unit', 0))
-            self.body_diameter_input.setText(str(data.get('body_diameter', '')))
-            self.body_diameter_unit.setCurrentIndex(data.get('body_diameter_unit', 0))
-            self.chute_height_input.setText(str(data.get('chute_height', '')))
-            self.chute_height_unit.setCurrentIndex(data.get('chute_height_unit', 0))
         try:
             with open(os.path.join(os.path.dirname(__file__), 'user_settings.json'), 'w') as f:
                 json.dump(data, f)
