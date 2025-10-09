@@ -3220,12 +3220,35 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Get rocket parameters from Simulation tab
         try:
-            m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd = self.get_inputs_for_simulation()
+            vals = self.get_inputs_for_simulation()
+            m = vals[0] if len(vals) > 0 else 5.0
+            Cd = vals[1] if len(vals) > 1 else 0.7
+            A = vals[2] if len(vals) > 2 else 0.004560
+            rho = vals[3] if len(vals) > 3 else 1.225
+            time_step = vals[4] if len(vals) > 4 else 0.1
+            fin_thickness = vals[5] if len(vals) > 5 else 0.003
+            fin_length = vals[6] if len(vals) > 6 else 0.1
+            body_diameter = vals[7] if len(vals) > 7 else 0.06
+            chute_height = vals[8] if len(vals) > 8 else 500.0
+            chute_size = vals[9] if len(vals) > 9 and vals[9] is not None else 0.5
+            chute_deploy_time = vals[10] if len(vals) > 10 else 0.0
+            chute_cd = vals[11] if len(vals) > 11 and vals[11] is not None else 1.5
             if m <= 0 or Cd <= 0 or A <= 0 or rho <= 0:
                 raise ValueError("Invalid simulation parameters")
-        except:
+        except Exception:
             # Fallback to default values if simulation inputs are invalid
-            m, Cd, A, rho = 5.0, 0.7, 0.004560, 1.225
+            m = 5.0
+            Cd = 0.7
+            A = 0.004560
+            rho = 1.225
+            time_step = 0.1
+            fin_thickness = 0.003
+            fin_length = 0.1
+            body_diameter = 0.06
+            chute_height = 500.0
+            chute_size = 0.5
+            chute_deploy_time = 0.0
+            chute_cd = 1.5
         
         # Get wind and stability parameters
         wind_speed = self.wind_speed_input.value()
@@ -3676,6 +3699,93 @@ class RocketSimulationUI(QtWidgets.QWidget):
         if fileName:
             self.thrust_curve_path = fileName
             self.result_label.setText(f"Selected thrust curve: {fileName}")
+            # Try to auto-fill propellant mass from the selected CSV
+            try:
+                self.try_set_propellant_mass_from_file(fileName)
+            except Exception:
+                pass
+
+    def try_set_propellant_mass_from_file(self, path):
+        import os, csv, re
+        _, ext = os.path.splitext(path.lower())
+        if ext != '.csv':
+            return
+        # First pass: robust scan to find header with 'thrust' and parse metadata lines above it
+        with open(path, newline='') as f:
+            r = csv.reader(f)
+            rows = []
+            for row in r:
+                if not row:
+                    continue
+                cleaned = [(c or '').strip() for c in row]
+                if any(cleaned):
+                    rows.append(cleaned)
+        header_idx = None
+        for i, row in enumerate(rows):
+            lc = [c.lower() for c in row]
+            if any('thrust' in c for c in lc):
+                header_idx = i
+                break
+        # Try to extract prop mass from lines above header
+        if header_idx is not None:
+            for i in range(header_idx):
+                line = ','.join(rows[i]).lower()
+                if ('propellant' in line) or ('prop mass' in line) or ('propellant mass' in line):
+                    nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", line)
+                    if nums:
+                        try:
+                            val = float(nums[-1])
+                            if ' g' in line and 'kg' not in line:
+                                val = val / 1000.0
+                            if val > 0:
+                                self.prop_mass_unit.setCurrentIndex(0)  # kg
+                                self.prop_mass_input.setText(f"{val:.3f}")
+                                return
+                        except Exception:
+                            pass
+        # Fallback: try headered columns using DictReader and known field names
+        try:
+            with open(path, newline='') as f:
+                sample = f.read(2048)
+                f.seek(0)
+                has_header = True
+                try:
+                    has_header = csv.Sniffer().has_header(sample)
+                except Exception:
+                    pass
+                if not has_header:
+                    return
+                reader = csv.DictReader(f)
+                if not reader.fieldnames:
+                    return
+                pm_keys_kg = ['propellant_mass','prop_mass','m_propellant','propellant','propellant_mass_kg','prop_weight_kg']
+                pm_keys_g = ['propellant_mass_g','prop_mass_g','prop_g','prop_weight_g']
+                row = next(reader, None)
+                if not row:
+                    return
+                val = None
+                # Normalize keys to lower
+                lower_row = { (k or '').strip().lower(): v for k, v in row.items() }
+                for k in pm_keys_kg:
+                    if k in lower_row and lower_row[k] not in (None, ''):
+                        try:
+                            val = float(lower_row[k])
+                            break
+                        except Exception:
+                            pass
+                if val is None:
+                    for k in pm_keys_g:
+                        if k in lower_row and lower_row[k] not in (None, ''):
+                            try:
+                                val = float(lower_row[k]) / 1000.0
+                                break
+                            except Exception:
+                                pass
+                if val is not None and val > 0:
+                    self.prop_mass_unit.setCurrentIndex(0)  # kg
+                    self.prop_mass_input.setText(f"{val:.3f}")
+        except Exception:
+            return
 
     def get_value_in_base_unit(self, value, unit_idx, factors):
         try:

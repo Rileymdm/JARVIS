@@ -65,20 +65,100 @@ def run_simulation(
     import csv
     if thrust_curve_path:
         thrust_data = []
+        prop_mass_from_file = None
+        import os
+        _, ext = os.path.splitext(thrust_curve_path.lower())
         with open(thrust_curve_path, newline='') as csvfile:
-            reader = csv.reader(csvfile)
-            for row in reader:
-                # Skip empty or header rows
-                if not row or len(row) < 2:
-                    continue
-                try:
-                    t = float(row[0])
-                    thrust = float(row[1])
-                    thrust_data.append((t, thrust))
-                except Exception:
-                    continue
+            # Robust CSV scan: handle metadata rows above header containing 'thrust'
+            if ext == '.csv':
+                import re
+                reader = csv.reader(csvfile)
+                rows = []
+                for row in reader:
+                    if not row:
+                        continue
+                    cleaned = [ (c or '').strip() for c in row ]
+                    if any(cleaned):
+                        rows.append(cleaned)
+                header_idx = None
+                time_idx = None
+                thrust_idx = None
+                # Find header row containing 'thrust'
+                for i, row in enumerate(rows):
+                    lc = [c.lower() for c in row]
+                    if any('thrust' in c for c in lc):
+                        header_idx = i
+                        # pick columns
+                        # time column candidates
+                        try:
+                            time_idx = next(j for j,c in enumerate(lc) if any(k in c for k in ['time','sec','(s']))
+                        except StopIteration:
+                            time_idx = 0 if len(row) > 0 else None
+                        try:
+                            thrust_idx = next(j for j,c in enumerate(lc) if 'thrust' in c)
+                        except StopIteration:
+                            thrust_idx = 1 if len(row) > 1 else None
+                        break
+                # Extract propellant mass from lines above header
+                if header_idx is not None and prop_mass_from_file is None:
+                    for i in range(header_idx):
+                        line = ','.join(rows[i]).lower()
+                        if ('propellant' in line) or ('prop mass' in line) or ('propellant mass' in line):
+                            # find first float
+                            nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", line)
+                            if nums:
+                                try:
+                                    val = float(nums[-1])
+                                    # if ' g' present without 'kg', assume grams
+                                    if ' g' in line and 'kg' not in line:
+                                        val = val / 1000.0
+                                    if val > 0:
+                                        prop_mass_from_file = val
+                                        break
+                                except Exception:
+                                    pass
+                # Parse data rows
+                if header_idx is not None and time_idx is not None and thrust_idx is not None:
+                    for row in rows[header_idx+1:]:
+                        if len(row) <= max(time_idx, thrust_idx):
+                            continue
+                        try:
+                            t = float(row[time_idx])
+                            F = float(row[thrust_idx])
+                            thrust_data.append((t, F))
+                        except Exception:
+                            continue
+                else:
+                    # Fallback: simple two-column CSV
+                    for row in rows:
+                        if len(row) < 2:
+                            continue
+                        try:
+                            t = float(row[0]); F = float(row[1])
+                            thrust_data.append((t, F))
+                        except Exception:
+                            continue
+            else:
+                # Non-CSV file (e.g., .eng/.rasp). Keep legacy simple parse: two columns time, thrust
+                reader = csv.reader(csvfile, delimiter=' ', skipinitialspace=True)
+                for row in reader:
+                    # skip comments and headers
+                    if not row or row[0].startswith(('#',';')):
+                        continue
+                    if len(row) == 2:
+                        try:
+                            t = float(row[0]); F = float(row[1])
+                            thrust_data.append((t, F))
+                        except Exception:
+                            continue
+                    else:
+                        # header-like ENG line has many tokens; skip
+                        continue
         if not thrust_data:
             return {'error': "Thrust curve file is empty or invalid."}
+        # Prefer propellant mass from file when not provided by caller
+        if propellant_mass in (None, 0) and 'prop_mass_from_file' in locals() and prop_mass_from_file:
+            propellant_mass = prop_mass_from_file
     else:
         thrust_data = [
             (0.124, 816.849), (0.375, 796.043), (0.626, 781.861), (0.877, 767.440),

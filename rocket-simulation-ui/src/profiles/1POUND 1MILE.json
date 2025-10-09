@@ -1,11 +1,13 @@
 {
   "version": "1.0",
-  "name": "1:1",
-  "description": "AVENGER",
-  "created": "Tue Oct 7 13:28:50 2025",
+  "name": "1POUND 1MILE",
+  "description": "YAYAYAY",
+  "created": "Thu Oct 9 13:40:00 2025",
   "rocket_parameters": {
     "mass": "10",
     "mass_unit": 2,
+    "prop_mass": "1.5",
+    "prop_mass_unit": 0,
     "cd": "0.75",
     "area": "0.008107",
     "area_unit": 0,
@@ -22,7 +24,7 @@
     "body_diameter_unit": 2,
     "chute_height": "300",
     "chute_height_unit": 0,
-    "chute_size": "15",
+    "chute_size": "15.2",
     "chute_size_unit": 1,
     "chute_cd": "2.2"
   },
