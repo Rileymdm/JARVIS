@@ -1051,6 +1051,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.mass_unit = QtWidgets.QComboBox(); self.mass_unit.addItems(["kg", "g", "lb"])
         mass_row = QtWidgets.QHBoxLayout(); mass_row.addWidget(self.mass_input); mass_row.addWidget(self.mass_unit)
 
+        # New: Propellant mass (subtracted from start mass during burn)
+        self.prop_mass_input = QtWidgets.QLineEdit()
+        self.prop_mass_input.setPlaceholderText("e.g., 1.2")
+        self.prop_mass_unit = QtWidgets.QComboBox(); self.prop_mass_unit.addItems(["kg", "g", "lb"])
+        prop_mass_row = QtWidgets.QHBoxLayout(); prop_mass_row.addWidget(self.prop_mass_input); prop_mass_row.addWidget(self.prop_mass_unit)
+
         self.cd_input = QtWidgets.QLineEdit()
         self.cd_input.setPlaceholderText("e.g., 0.7")
 
@@ -1121,10 +1127,10 @@ class RocketSimulationUI(QtWidgets.QWidget):
             }
         """
         
-        for widget in [self.mass_input, self.cd_input, self.area_input, self.rho_input,
-                   self.timestep_input,
-                   self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
-                   self.chute_height_input, self.chute_size_input]:
+        for widget in [self.mass_input, self.prop_mass_input, self.cd_input, self.area_input, self.rho_input,
+                       self.timestep_input,
+                       self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
+                       self.chute_height_input, self.chute_size_input]:
             widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
             widget.setStyleSheet(input_style)
             
@@ -1161,20 +1167,21 @@ class RocketSimulationUI(QtWidgets.QWidget):
             }
         """
         
-        for combo in [self.mass_unit, self.area_unit, self.rho_unit, self.timestep_unit,
-                     self.fin_thickness_unit, self.fin_length_unit, self.body_diameter_unit,
-                     self.chute_height_unit, self.chute_size_unit]:
+        for combo in [self.mass_unit, self.prop_mass_unit, self.area_unit, self.rho_unit, self.timestep_unit,
+                       self.fin_thickness_unit, self.fin_length_unit, self.body_diameter_unit,
+                       self.chute_height_unit, self.chute_size_unit]:
             combo.setStyleSheet(combo_style)
             
-        for widget in [self.mass_input, self.cd_input, self.area_input, self.rho_input,
-                   self.timestep_input,
-                   self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
-                   self.chute_height_input, self.chute_size_input]:
+        for widget in [self.mass_input, self.prop_mass_input, self.cd_input, self.area_input, self.rho_input,
+                       self.timestep_input,
+                       self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
+                       self.chute_height_input, self.chute_size_input]:
             widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
             widget.setStyleSheet(input_style)
 
         # Add rows to form layout
-        form_layout.addRow("Mass:", mass_row)
+        form_layout.addRow("Liftoff Mass:", mass_row)
+        form_layout.addRow("Propellant Mass:", prop_mass_row)
         form_layout.addRow("Drag Coefficient (Cd):", self.cd_input)
         form_layout.addRow("Cross-sectional Area:", area_row)
         form_layout.addRow("Air Density:", rho_row)
@@ -1785,22 +1792,40 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     # Removed redundant single-variable graph selection dropdown per user request.
 
-        # Multi-variable graphing checkboxes
+        # Multi-variable graphing checkboxes (compact grid)
         self.graph_vars = {
             "Altitude": QtWidgets.QCheckBox("Altitude"),
             "Velocity": QtWidgets.QCheckBox("Velocity"),
             "Mass": QtWidgets.QCheckBox("Mass"),
             "Acceleration": QtWidgets.QCheckBox("Acceleration"),
             "Thrust": QtWidgets.QCheckBox("Thrust"),
-            "Drag": QtWidgets.QCheckBox("Drag")
+            "Drag": QtWidgets.QCheckBox("Drag"),
+            "G-Load": QtWidgets.QCheckBox("G-Load"),
+            "Net Force": QtWidgets.QCheckBox("Net Force")
         }
-        graph_var_layout = QtWidgets.QHBoxLayout()
-        graph_var_layout.addWidget(QtWidgets.QLabel("Variables to graph:"))
-        for cb in self.graph_vars.values():
-            cb.setChecked(False)
+        graph_var_widget = QtWidgets.QWidget()
+        graph_var_container = QtWidgets.QVBoxLayout(graph_var_widget)
+        graph_var_container.setContentsMargins(0, 0, 0, 0)
+        graph_var_container.setSpacing(4)
+        title_lbl = QtWidgets.QLabel("Variables to graph:")
+        title_lbl.setStyleSheet("font-size: 11px; font-weight: bold;")
+        graph_var_container.addWidget(title_lbl)
+        grid = QtWidgets.QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(2)
+        grid.setContentsMargins(0, 0, 0, 0)
+        cols = 4
+        names = list(self.graph_vars.keys())
+        for idx, name in enumerate(names):
+            cb = self.graph_vars[name]
+            # Default to showing Altitude only; others off until selected
+            cb.setChecked(name == "Altitude")
             cb.stateChanged.connect(self.update_graph)
-            graph_var_layout.addWidget(cb)
-        left_layout.addLayout(graph_var_layout)
+            cb.setStyleSheet("QCheckBox { font-size: 11px; spacing: 6px; }")
+            r, c = divmod(idx, cols)
+            grid.addWidget(cb, r, c)
+        graph_var_container.addLayout(grid)
+        left_layout.addWidget(graph_var_widget)
 
         # Connect unit dropdowns to conversion update
         self.mass_unit.currentIndexChanged.connect(lambda: self.update_conversions('mass'))
@@ -3676,12 +3701,14 @@ class RocketSimulationUI(QtWidgets.QWidget):
             chute_cd = 1.5
         # No random time-based deployment by default; we deploy based on descent and height
         chute_deploy_time = None
-        return m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd
+        # Convert propellant mass
+        prop_m = self.get_value_in_base_unit(self.prop_mass_input.text(), self.prop_mass_unit.currentIndex(), [1, 0.001, 0.453592]) if self.prop_mass_input.text() else None
+        return m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd, prop_m
 
     def start_simulation(self):
         try:
             self.save_inputs()
-            m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd = self.get_inputs_for_simulation()
+            m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd, prop_m = self.get_inputs_for_simulation()
             
             # Input validation
             errors = []
@@ -3693,6 +3720,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 errors.append("Area must be positive.")
             if rho <= 0:
                 errors.append("Air density must be positive.")
+            if prop_m is not None and prop_m >= m:
+                errors.append("Propellant mass must be less than liftoff mass.")
             if errors:
                 self.error_label.setText("; ".join(errors))
                 return
@@ -3716,7 +3745,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 'chute_size': chute_size,
                 'time_step': time_step,
                 'chute_deploy_start': chute_deploy_time,
-                'chute_cd': chute_cd
+                'chute_cd': chute_cd,
+                'propellant_mass': prop_m
             }
             results = run_simulation(m, Cd, A, rho, **sim_kwargs)
             # Error handling for simulation results
@@ -3779,9 +3809,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
             max_drag_idx = next(i for i, r in enumerate(results) if r['drag'] == max_drag)
             max_drag_time = results[max_drag_idx]['time']
 
-            max_mass = max(r['mass'] for r in results)
-            max_mass_idx = next(i for i, r in enumerate(results) if r['mass'] == max_mass)
-            max_mass_time = results[max_mass_idx]['time']
+            # Final mass (not max) is more meaningful after burn
+            final_mass = results[-1]['mass']
+            final_mass_time = results[-1]['time']
 
             # Mach calculation using local speed of sound
             local_a = self.get_local_speed_of_sound()
@@ -3804,18 +3834,18 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 thrust_unit = 'lbf'
                 max_drag_disp = max_drag * 0.224809
                 drag_unit = 'lbf'
-                max_mass_disp = max_mass * 2.20462
+                final_mass_disp = final_mass * 2.20462
                 mass_unit = 'lb'
             else:
                 max_vel_disp = max_vel
                 max_alt_disp = max_alt
                 max_thrust_disp = max_thrust
                 max_drag_disp = max_drag
-                max_mass_disp = max_mass
+                final_mass_disp = final_mass
 
             # Dragstrip-style stat: show all max times in a single line
             dragstrip = (
-                f"[Max Times] Apogee: {max_alt_time:.2f}s | Velocity: {max_vel_time:.2f}s | Mach: {max_mach_time:.2f}s | Thrust: {max_thrust_time:.2f}s | Drag: {max_drag_time:.2f}s | Mass: {max_mass_time:.2f}s"
+                f"[Max Times] Apogee: {max_alt_time:.2f}s | Velocity: {max_vel_time:.2f}s | Mach: {max_mach_time:.2f}s | Thrust: {max_thrust_time:.2f}s | Drag: {max_drag_time:.2f}s | Final Mass @ {final_mass_time:.2f}s"
             )
 
             # Nicely formatted compact HTML summary table (final stats)
@@ -3829,7 +3859,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         <tr><td style='padding:2px 8px;'>Max Mach</td><td style='padding:2px 8px;text-align:right;'>{max_mach:.2f}</td></tr>
         <tr><td style='padding:2px 8px;'>Max Thrust</td><td style='padding:2px 8px;text-align:right;'>{max_thrust_disp:.2f} {thrust_unit.upper()}</td></tr>
         <tr><td style='padding:2px 8px;'>Max Drag</td><td style='padding:2px 8px;text-align:right;'>{max_drag_disp:.2f} {drag_unit.upper()}</td></tr>
-        <tr><td style='padding:2px 8px;'>Final Mass</td><td style='padding:2px 8px;text-align:right;'>{max_mass_disp:.2f} {mass_unit.upper()}</td></tr>
+    <tr><td style='padding:2px 8px;'>Final Mass</td><td style='padding:2px 8px;text-align:right;'>{final_mass_disp:.2f} {mass_unit.upper()}</td></tr>
     </table>
 </div>
 """
@@ -3848,20 +3878,45 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.style_axes(ax)
 
         times = [r['time'] for r in results]
-        # Pick series colors based on theme
+        # Derived series
+        g0 = 9.81
+        acc = [r.get('acceleration', 0.0) for r in results]
+        masses = [r.get('mass', 0.0) for r in results]
+        thrusts = [r.get('thrust', 0.0) for r in results]
+        drag_signed = [r.get('drag_signed', -abs(r.get('drag', 0.0))) for r in results]
+        net_force = [thrusts[i] + drag_signed[i] - masses[i]*g0 for i in range(len(results))]
+        g_load = [a/g0 if g0 else 0.0 for a in acc]
+
+        # Pick series colors based on theme (extended palette)
         if self.current_theme == "retro":
-            series_colors = ["#E94F37", "#1C77C3", "#FFD447", "#3C2F1E", "#A7C7E7", "#A259F7"]
+            series_colors = [
+                "#E94F37", "#1C77C3", "#FFD447", "#3C2F1E", "#A7C7E7", "#A259F7", "#2E8B57", "#FF6B35"
+            ]
         else:
-            series_colors = ["#00D4FF", "#00FF41", "#FF6B35", "#ECF0F1", "#FFA500", "#FF69B4"]
-        labels = ["Altitude", "Velocity", "Mass", "Acceleration", "Thrust", "Drag"]
-        keys = ["altitude", "velocity", "mass", "acceleration", "thrust", "drag"]
+            series_colors = [
+                "#00D4FF", "#00FF41", "#FF6B35", "#ECF0F1", "#FFA500", "#FF69B4", "#32CD32", "#FF1493"
+            ]
+
+        labels = [
+            "Altitude", "Velocity", "Mass", "Acceleration", "Thrust", "Drag", "G-Load", "Net Force"
+        ]
+        values_map = {
+            "Altitude": [r.get('altitude', 0.0) for r in results],
+            "Velocity": [r.get('velocity', 0.0) for r in results],
+            "Mass": masses,
+            "Acceleration": acc,
+            "Thrust": thrusts,
+            "Drag": [r.get('drag', 0.0) for r in results],
+            "G-Load": g_load,
+            "Net Force": net_force,
+        }
         # Plot selected variable(s), but default to altitude for tooltip
         plotted = False
         tooltip_label = 'Altitude'
         tooltip_values = [r['altitude'] for r in results]
-        for i, (label, key) in enumerate(zip(labels, keys)):
-            if self.graph_vars[label].isChecked():
-                values = [r.get(key, 0) for r in results]
+        for i, label in enumerate(labels):
+            if self.graph_vars.get(label) and self.graph_vars[label].isChecked():
+                values = values_map[label]
                 ax.plot(times, values, label=label, color=series_colors[i % len(series_colors)])
                 if not plotted:
                     tooltip_label = label
@@ -3872,7 +3927,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
             ax.plot(times, tooltip_values, label=tooltip_label, color=series_colors[0])
         ax.set_xlabel('Time (s)')
         ax.set_ylabel('Value')
-        ax.legend()
+        ax.legend(ncol=2, loc='best')
         ax.figure.tight_layout()
         self.canvas.draw()
 
@@ -4142,9 +4197,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
                     elif tooltip_label == 'Acceleration':
                         unit_value = yval * 3.28084
                         unit_label = 'Acceleration (ft/s²)'
-                    elif tooltip_label == 'Thrust' or tooltip_label == 'Drag':
+                    elif tooltip_label in ('Thrust','Drag','Net Force'):
                         unit_value = yval * 0.224809
                         unit_label = f'{tooltip_label} (lbf)'
+                    elif tooltip_label == 'G-Load':
+                        unit_label = 'G-Load (g)'
+                        unit_value = yval
                     unit_time = xval  # Time stays in seconds
                 else:
                     # Metric
@@ -4156,8 +4214,11 @@ class RocketSimulationUI(QtWidgets.QWidget):
                         unit_label = 'Mass (kg)'
                     elif tooltip_label == 'Acceleration':
                         unit_label = 'Acceleration (m/s²)'
-                    elif tooltip_label == 'Thrust' or tooltip_label == 'Drag':
+                    elif tooltip_label in ('Thrust','Drag','Net Force'):
                         unit_label = f'{tooltip_label} (N)'
+                    elif tooltip_label == 'G-Load':
+                        unit_label = 'G-Load (g)'
+                        unit_value = yval
                 tooltip_text = f"Time: {unit_time:.2f} s\n{unit_label}: {unit_value:.2f}"
                 QtWidgets.QToolTip.showText(QtGui.QCursor.pos(), tooltip_text, self.canvas)
             else:
@@ -4169,6 +4230,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
         data = {
             'mass': self.mass_input.text(),
             'mass_unit': self.mass_unit.currentIndex(),
+            'prop_mass': self.prop_mass_input.text(),
+            'prop_mass_unit': self.prop_mass_unit.currentIndex(),
             'cd': self.cd_input.text(),
             'area': self.area_input.text(),
             'area_unit': self.area_unit.currentIndex(),
@@ -4205,6 +4268,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 data = json.load(f)
             self.mass_input.setText(str(data.get('mass', '')))
             self.mass_unit.setCurrentIndex(data.get('mass_unit', 0))
+            self.prop_mass_input.setText(str(data.get('prop_mass', '')))
+            self.prop_mass_unit.setCurrentIndex(data.get('prop_mass_unit', 0))
             self.cd_input.setText(str(data.get('cd', '')))
             self.area_input.setText(str(data.get('area', '')))
             self.area_unit.setCurrentIndex(data.get('area_unit', 0))
@@ -4301,6 +4366,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             'rocket_parameters': {
                 'mass': self.mass_input.text(),
                 'mass_unit': self.mass_unit.currentIndex(),
+                'prop_mass': self.prop_mass_input.text(),
+                'prop_mass_unit': self.prop_mass_unit.currentIndex(),
                 'cd': self.cd_input.text(),
                 'area': self.area_input.text(),
                 'area_unit': self.area_unit.currentIndex(),
@@ -4347,6 +4414,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             rp = config.get('rocket_parameters', {})
             self.mass_input.setText(rp.get('mass', ''))
             self.mass_unit.setCurrentIndex(rp.get('mass_unit', 0))
+            self.prop_mass_input.setText(rp.get('prop_mass', ''))
+            self.prop_mass_unit.setCurrentIndex(rp.get('prop_mass_unit', 0))
             self.cd_input.setText(rp.get('cd', ''))
             self.area_input.setText(rp.get('area', ''))
             self.area_unit.setCurrentIndex(rp.get('area_unit', 0))

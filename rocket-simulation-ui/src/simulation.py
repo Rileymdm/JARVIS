@@ -17,6 +17,7 @@ def run_simulation(
     drag_cap=400.0,
     drag_cap_mode='soft',
     drag_cap_soft_threshold=0.85,
+    propellant_mass=None,
     **kwargs
 ):
     """
@@ -107,7 +108,14 @@ def run_simulation(
     results = []
 
     total_impulse = calculate_total_impulse(thrust_data)
-    Isp = total_impulse/g0  # Estimate Isp from total impulse and g0
+    # Determine specific impulse. If propellant_mass is provided, compute Isp so that
+    # integrated mass flow consumes exactly that propellant mass over the burn.
+    if propellant_mass is not None and propellant_mass > 0:
+        Isp = total_impulse / (propellant_mass * g0)  # seconds
+    else:
+        # Backward-compatibility fallback: assume an effective Isp from total impulse alone
+        # (equivalent to assuming 1 kg propellant mass)
+        Isp = total_impulse / g0  # seconds
 
     # --- Atmosphere / Aerodynamics Helpers ---
     rho0 = rho  # treat provided rho as sea-level density when atmosphere != constant
@@ -167,10 +175,18 @@ def run_simulation(
     # Initialize effective coefficients BEFORE first use
     current_Cd = Cd
     current_A = A
-    last_signed_drag = 0.0
+    # Separate smoothing states for body and chute drag components
+    last_rocket_drag = 0.0
+    last_chute_drag = 0.0
     drag_smoothing_alpha = 0.30
     sim_version = 2
     deployment_stats = None
+
+    # Track masses for proper burn-down behavior
+    initial_mass = m
+    dry_mass = None
+    if propellant_mass is not None:
+        dry_mass = max(0.0, initial_mass - max(0.0, propellant_mass))
 
     try:
         while True:
@@ -231,43 +247,53 @@ def run_simulation(
                 rocket_drag_signed_raw = 0.0
                 chute_drag_signed_raw = 0.0
                 raw_signed_drag = 0.0
-            signed_drag_unsmoothed = raw_signed_drag
-            signed_drag_smoothed = (1 - drag_smoothing_alpha) * last_signed_drag + drag_smoothing_alpha * raw_signed_drag
+            # Smooth body and chute drag separately
+            rocket_drag_signed_smoothed = (1 - drag_smoothing_alpha) * last_rocket_drag + drag_smoothing_alpha * rocket_drag_signed_raw
+            chute_drag_signed_smoothed_uncapped = (1 - drag_smoothing_alpha) * last_chute_drag + drag_smoothing_alpha * chute_drag_signed_raw
+
+            # Apply limiter ONLY to the chute component (if deployed)
             drag_cap_applied = False
-            signed_drag = signed_drag_smoothed
             drag_cap_method = None
-            if drag_cap and drag_cap > 0:
+            chute_drag_signed_smoothed = chute_drag_signed_smoothed_uncapped
+            if drag_cap and drag_cap > 0 and chute_deployed:
                 if drag_cap_mode == 'hard':
                     drag_cap_method = 'hard'
-                    if abs(signed_drag) > drag_cap:
-                        signed_drag = -drag_cap if signed_drag < 0 else drag_cap
+                    if abs(chute_drag_signed_smoothed) > drag_cap:
+                        chute_drag_signed_smoothed = -drag_cap if chute_drag_signed_smoothed < 0 else drag_cap
                         drag_cap_applied = True
-                else:  # soft mode (default)
+                else:
                     drag_cap_method = 'soft'
-                    # Keep linear region up to threshold * cap, then ease into cap with smoothstep.
                     thr = max(0.0, min(0.9999, drag_cap_soft_threshold)) * drag_cap
-                    mag = abs(signed_drag)
-                    sign = 1 if signed_drag >= 0 else -1
+                    mag = abs(chute_drag_signed_smoothed)
+                    sign = 1 if chute_drag_signed_smoothed >= 0 else -1
                     if mag > thr:
-                        # normalized progress into the capping region (0 to 1+)
-                        span = drag_cap - thr if drag_cap > thr else drag_cap * 0.0001
+                        span = drag_cap - thr if drag_cap > thr else max(1e-6, drag_cap * 1e-4)
                         r = (mag - thr) / span
                         if r > 0:
-                            # cubic smoothstep clamp to 1
                             r_clamped = 1.0 if r >= 1 else (3*r*r - 2*r*r*r)
                             mag_new = thr + (drag_cap - thr) * r_clamped
                             if mag_new > drag_cap:
                                 mag_new = drag_cap
-                            if mag_new < mag:  # only reduce magnitude (monotonic limiting)
+                            if mag_new < mag:
                                 drag_cap_applied = True
                                 mag = mag_new
-                        signed_drag = sign * mag
-            last_signed_drag = signed_drag
+                        chute_drag_signed_smoothed = sign * mag
+
+            # Combine components
+            signed_drag_smoothed_uncapped = rocket_drag_signed_smoothed + chute_drag_signed_smoothed_uncapped
+            signed_drag = rocket_drag_signed_smoothed + chute_drag_signed_smoothed
+
+            # Update history
+            last_rocket_drag = rocket_drag_signed_smoothed
+            last_chute_drag = chute_drag_signed_smoothed
 
             # Net acceleration (positive upward)
             a = (F + signed_drag) / m - g
             mdot = F / (Isp * g0) if F > 0 else 0
             m -= mdot * TimeI
+            # Prevent mass from dropping below dry mass due to integration error
+            if dry_mass is not None and m < dry_mass:
+                m = dry_mass
             velocity += a * TimeI
             altitude += velocity * TimeI
             time += TimeI
@@ -300,10 +326,10 @@ def run_simulation(
                 'velocity': velocity,
                 'acceleration': a,
                 'thrust': F,
-                'drag': abs(signed_drag),          # capped magnitude
-                'drag_signed': signed_drag,        # capped/limited signed drag actually used in dynamics
+                'drag': abs(signed_drag),          # magnitude used in dynamics
+                'drag_signed': signed_drag,        # signed used in dynamics
                 'drag_raw_signed': raw_signed_drag,
-                'drag_signed_uncapped': signed_drag_unsmoothed,  # pre-cap smoothed value
+                'drag_signed_uncapped': signed_drag_smoothed_uncapped,  # total smoothed before chute limit
                 'drag_cap_applied': drag_cap_applied,
                 'drag_cap_method': drag_cap_method,
                 'Cd_eff': current_Cd,
@@ -321,8 +347,14 @@ def run_simulation(
                 'rocket_drag_signed_raw': rocket_drag_signed_raw,
                 'chute_drag_signed_raw': chute_drag_signed_raw,
                 'chute_fill': chute_fill,
+                'rocket_drag_signed_smoothed': rocket_drag_signed_smoothed,
+                'chute_drag_signed_smoothed_uncapped': chute_drag_signed_smoothed_uncapped,
+                'chute_drag_signed_smoothed': chute_drag_signed_smoothed,
                 'ballistic_coeff_body': ballistic_coeff_body,
-                'ballistic_coeff_current': ballistic_coeff_current
+                'ballistic_coeff_current': ballistic_coeff_current,
+                'initial_mass': initial_mass,
+                'propellant_mass': propellant_mass if propellant_mass is not None else None,
+                'dry_mass': dry_mass
             })
             if altitude == 0 and velocity <= 0:
                 break
