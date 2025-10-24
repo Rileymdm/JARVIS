@@ -1,4 +1,5 @@
 # Rocket Simulation UI
+Created By: Riley Wickersham|Holden Eckstrom|Luke King|Austin Aaron|Darren Brandt|Caspian Hurst|Kaleb Cooper|
 
 ## Overview
 The Rocket Simulation UI project provides a graphical user interface for simulating rocket launches. Users can input various parameters related to the rocket's mass, drag coefficient, cross-sectional area, air density, and motor burn time. The application runs the simulation and visualizes the results, including altitude and velocity over time.
