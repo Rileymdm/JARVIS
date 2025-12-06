@@ -1104,6 +1104,22 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.chute_size_unit = QtWidgets.QComboBox(); self.chute_size_unit.addItems(["m²", "ft²"])
         chute_size_row = QtWidgets.QHBoxLayout(); chute_size_row.addWidget(self.chute_size_input); chute_size_row.addWidget(self.chute_size_unit)
 
+        # Airbrake inputs
+        self.airbrake_altitude_input = QtWidgets.QLineEdit()
+        self.airbrake_altitude_input.setPlaceholderText("e.g., 1000")
+        self.airbrake_altitude_unit = QtWidgets.QComboBox(); self.airbrake_altitude_unit.addItems(["m", "ft"])
+        airbrake_altitude_row = QtWidgets.QHBoxLayout(); airbrake_altitude_row.addWidget(self.airbrake_altitude_input); airbrake_altitude_row.addWidget(self.airbrake_altitude_unit)
+
+        self.airbrake_time_input = QtWidgets.QLineEdit()
+        self.airbrake_time_input.setPlaceholderText("e.g., 10")
+        self.airbrake_time_unit = QtWidgets.QComboBox(); self.airbrake_time_unit.addItems(["s", "ms"])
+        airbrake_time_row = QtWidgets.QHBoxLayout(); airbrake_time_row.addWidget(self.airbrake_time_input); airbrake_time_row.addWidget(self.airbrake_time_unit)
+
+        self.airbrake_area_input = QtWidgets.QLineEdit()
+        self.airbrake_area_input.setPlaceholderText("e.g., 0.02")
+        self.airbrake_area_unit = QtWidgets.QComboBox(); self.airbrake_area_unit.addItems(["m²", "ft²"])
+        airbrake_area_row = QtWidgets.QHBoxLayout(); airbrake_area_row.addWidget(self.airbrake_area_input); airbrake_area_row.addWidget(self.airbrake_area_unit)
+
         # Set size policies and styling for better spacing
         input_style = """
             QLineEdit {
@@ -1130,7 +1146,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         for widget in [self.mass_input, self.prop_mass_input, self.cd_input, self.area_input, self.rho_input,
                        self.timestep_input,
                        self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
-                       self.chute_height_input, self.chute_size_input]:
+                       self.chute_height_input, self.chute_size_input, self.airbrake_altitude_input, self.airbrake_time_input, self.airbrake_area_input]:
             widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
             widget.setStyleSheet(input_style)
             
@@ -1169,15 +1185,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         for combo in [self.mass_unit, self.prop_mass_unit, self.area_unit, self.rho_unit, self.timestep_unit,
                        self.fin_thickness_unit, self.fin_length_unit, self.body_diameter_unit,
-                       self.chute_height_unit, self.chute_size_unit]:
+                       self.chute_height_unit, self.chute_size_unit, self.airbrake_altitude_unit, 
+                       self.airbrake_time_unit, self.airbrake_area_unit]:
             combo.setStyleSheet(combo_style)
-            
-        for widget in [self.mass_input, self.prop_mass_input, self.cd_input, self.area_input, self.rho_input,
-                       self.timestep_input,
-                       self.fin_count_input, self.fin_thickness_input, self.fin_length_input, self.body_diameter_input,
-                       self.chute_height_input, self.chute_size_input]:
-            widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-            widget.setStyleSheet(input_style)
 
         # Add rows to form layout
         form_layout.addRow("Liftoff Mass:", mass_row)
@@ -1199,6 +1209,11 @@ class RocketSimulationUI(QtWidgets.QWidget):
         self.chute_cd_input.setStyleSheet(input_style)  # Apply same styling
         self.chute_cd_input.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         form_layout.addRow("Parachute Drag Coefficient (Cd):", self.chute_cd_input)
+
+        # Airbrake inputs
+        form_layout.addRow("Airbrake Deploy Altitude:", airbrake_altitude_row)
+        form_layout.addRow("Airbrake Deploy Time:", airbrake_time_row)
+        form_layout.addRow("Airbrake Surface Area:", airbrake_area_row)
 
         left_layout.addLayout(form_layout)
 
@@ -3813,12 +3828,16 @@ class RocketSimulationUI(QtWidgets.QWidget):
         chute_deploy_time = None
         # Convert propellant mass
         prop_m = self.get_value_in_base_unit(self.prop_mass_input.text(), self.prop_mass_unit.currentIndex(), [1, 0.001, 0.453592]) if self.prop_mass_input.text() else None
-        return m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd, prop_m
+        # Airbrake inputs
+        airbrake_altitude = self.get_value_in_base_unit(self.airbrake_altitude_input.text(), self.airbrake_altitude_unit.currentIndex(), [1, 0.3048]) if self.airbrake_altitude_input.text() else None
+        airbrake_time = self.get_value_in_base_unit(self.airbrake_time_input.text(), self.airbrake_time_unit.currentIndex(), [1, 0.001]) if self.airbrake_time_input.text() else None
+        airbrake_area = self.get_value_in_base_unit(self.airbrake_area_input.text(), self.airbrake_area_unit.currentIndex(), [1, 0.092903]) if self.airbrake_area_input.text() else None
+        return m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd, prop_m, airbrake_altitude, airbrake_time, airbrake_area
 
     def start_simulation(self):
         try:
             self.save_inputs()
-            m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd, prop_m = self.get_inputs_for_simulation()
+            m, Cd, A, rho, time_step, fin_thickness, fin_length, body_diameter, chute_height, chute_size, chute_deploy_time, chute_cd, prop_m, airbrake_altitude, airbrake_time, airbrake_area = self.get_inputs_for_simulation()
             
             # Input validation
             errors = []
@@ -3856,7 +3875,10 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 'time_step': time_step,
                 'chute_deploy_start': chute_deploy_time,
                 'chute_cd': chute_cd,
-                'propellant_mass': prop_m
+                'propellant_mass': prop_m,
+                'airbrake_altitude': airbrake_altitude,
+                'airbrake_time': airbrake_time,
+                'airbrake_area': airbrake_area
             }
             results = run_simulation(m, Cd, A, rho, **sim_kwargs)
             # Error handling for simulation results
@@ -3930,6 +3952,15 @@ class RocketSimulationUI(QtWidgets.QWidget):
             max_mach_idx = machs.index(max_mach)
             max_mach_time = results[max_mach_idx]['time']
 
+            # Detect airbrake and parachute deployment times
+            airbrake_deploy_time = None
+            parachute_deploy_time = None
+            for r in results:
+                if r.get('airbrake_deployed') and airbrake_deploy_time is None:
+                    airbrake_deploy_time = r['time']
+                if r.get('chute_deployed') and parachute_deploy_time is None:
+                    parachute_deploy_time = r['time']
+
             vel_unit = 'm/s'
             alt_unit = 'm'
             thrust_unit = 'N'
@@ -3959,6 +3990,13 @@ class RocketSimulationUI(QtWidgets.QWidget):
             )
 
             # Nicely formatted compact HTML summary table (final stats)
+            # Build deployment info row
+            deployment_rows = ""
+            if airbrake_deploy_time is not None:
+                deployment_rows += f"<tr><td style='padding:2px 8px;'>Airbrake Deploy</td><td style='padding:2px 8px;text-align:right;'>{airbrake_deploy_time:.2f} s</td></tr>\n    "
+            if parachute_deploy_time is not None:
+                deployment_rows += f"<tr><td style='padding:2px 8px;'>Parachute Deploy</td><td style='padding:2px 8px;text-align:right;'>{parachute_deploy_time:.2f} s</td></tr>\n    "
+            
             summary_html = f"""
 <div style='font-family:Consolas, Courier New, monospace; font-size:12px; line-height:1.25;'>
     <table style='border-collapse:collapse;'>
@@ -3970,7 +4008,7 @@ class RocketSimulationUI(QtWidgets.QWidget):
         <tr><td style='padding:2px 8px;'>Max Thrust</td><td style='padding:2px 8px;text-align:right;'>{max_thrust_disp:.2f} {thrust_unit.upper()}</td></tr>
         <tr><td style='padding:2px 8px;'>Max Drag</td><td style='padding:2px 8px;text-align:right;'>{max_drag_disp:.2f} {drag_unit.upper()}</td></tr>
     <tr><td style='padding:2px 8px;'>Final Mass</td><td style='padding:2px 8px;text-align:right;'>{final_mass_disp:.2f} {mass_unit.upper()}</td></tr>
-    </table>
+    {deployment_rows}</table>
 </div>
 """
             self.result_label.setText(summary_html)
@@ -4360,8 +4398,14 @@ class RocketSimulationUI(QtWidgets.QWidget):
             'chute_height_unit': self.chute_height_unit.currentIndex(),
             'chute_size': self.chute_size_input.text(),
             'chute_size_unit': self.chute_size_unit.currentIndex(),
-            # graph_select removed (single-variable dropdown deleted), multi-variable checkboxes persist
             'chute_cd': self.chute_cd_input.text(),
+            'airbrake_altitude': self.airbrake_altitude_input.text(),
+            'airbrake_altitude_unit': self.airbrake_altitude_unit.currentIndex(),
+            'airbrake_time': self.airbrake_time_input.text(),
+            'airbrake_time_unit': self.airbrake_time_unit.currentIndex(),
+            'airbrake_area': self.airbrake_area_input.text(),
+            'airbrake_area_unit': self.airbrake_area_unit.currentIndex(),
+            # graph_select removed (single-variable dropdown deleted), multi-variable checkboxes persist
             'start_altitude': self.start_altitude_input.text(),
             'temperature': self.temperature_input.text(),
             'humidity': self.humidity_input.text(),
@@ -4399,6 +4443,12 @@ class RocketSimulationUI(QtWidgets.QWidget):
             self.chute_size_input.setText(str(data.get('chute_size', '')))
             self.chute_size_unit.setCurrentIndex(data.get('chute_size_unit', 0))
             self.chute_cd_input.setText(str(data.get('chute_cd', '1.5')))
+            self.airbrake_altitude_input.setText(str(data.get('airbrake_altitude', '')))
+            self.airbrake_altitude_unit.setCurrentIndex(data.get('airbrake_altitude_unit', 0))
+            self.airbrake_time_input.setText(str(data.get('airbrake_time', '')))
+            self.airbrake_time_unit.setCurrentIndex(data.get('airbrake_time_unit', 0))
+            self.airbrake_area_input.setText(str(data.get('airbrake_area', '')))
+            self.airbrake_area_unit.setCurrentIndex(data.get('airbrake_area_unit', 0))
             self.start_altitude_input.setText(str(data.get('start_altitude', '0')))
             self.temperature_input.setText(str(data.get('temperature', '15')))
             self.humidity_input.setText(str(data.get('humidity', '50')))

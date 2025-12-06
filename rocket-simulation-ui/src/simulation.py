@@ -18,6 +18,9 @@ def run_simulation(
     drag_cap_mode='soft',
     drag_cap_soft_threshold=0.85,
     propellant_mass=None,
+    airbrake_altitude=None,
+    airbrake_time=None,
+    airbrake_area=None,
     **kwargs
 ):
     """
@@ -31,6 +34,9 @@ def run_simulation(
         thrust_curve_path: Path to thrust curve CSV file [optional]
         chute_cd: Parachute drag coefficient (typical 1.5–2.2, used as entered)
         chute_size: Parachute area (m²)
+        airbrake_altitude: Altitude (m) at which to deploy airbrakes [optional]
+        airbrake_time: Time (s) at which to deploy airbrakes [optional]
+        airbrake_area: Additional surface area (m²) added by airbrakes when deployed
 
     Simulation Constants:
         g: Gravity acceleration (9.81 m/s²)
@@ -50,7 +56,7 @@ def run_simulation(
         rocket_ref_length: Optional reference length (m) for Reynolds/Mach related models (currently only Mach bump uses velocity & speed of sound).
 
     State Variables (updated during simulation):
-        time, velocity, altitude, mass, chute_deployed
+        time, velocity, altitude, mass, chute_deployed, airbrake_deployed
 
     Diagnostics Added:
         rho_local: Local air density (kg/m^3)
@@ -258,9 +264,19 @@ def run_simulation(
     # Separate smoothing states for body and chute drag components
     last_rocket_drag = 0.0
     last_chute_drag = 0.0
+    last_airbrake_drag = 0.0
     drag_smoothing_alpha = 0.30
     sim_version = 2
     deployment_stats = None
+    
+    # Airbrake initialization
+    airbrake_deployed = False
+    airbrake_deploy_time = None
+    airbrake_area_eff = 0.0  # Effective airbrake area (applied when deployed)
+    if airbrake_area is not None and airbrake_area > 0:
+        airbrake_area_eff = airbrake_area
+    else:
+        airbrake_area_eff = 0.0
 
     # Track masses for proper burn-down behavior
     initial_mass = m
@@ -292,6 +308,17 @@ def run_simulation(
                     'force_at_deployment': 0.0
                 }
 
+            # Airbrake deployment trigger (altitude-based or time-based)
+            if not airbrake_deployed and airbrake_area_eff > 0:
+                deploy_airbrake = False
+                if airbrake_altitude is not None and airbrake_altitude > 0 and altitude >= airbrake_altitude:
+                    deploy_airbrake = True
+                if airbrake_time is not None and airbrake_time > 0 and time >= airbrake_time:
+                    deploy_airbrake = True
+                if deploy_airbrake:
+                    airbrake_deployed = True
+                    airbrake_deploy_time = time
+
             # Simple linear inflation (can be replaced with ODE model if desired)
             chute_fill = 0.0
             target_Cd = chute_cd if chute_cd is not None else (chute_cd or 1.8)
@@ -316,20 +343,27 @@ def run_simulation(
                 current_A = A
 
             # Signed drag force (opposes velocity)
-            # --- Drag decomposition: body + (optional) parachute ---
+            # --- Drag decomposition: body + (optional) parachute + (optional) airbrakes ---
             if velocity != 0:
                 rocket_drag_signed_raw = -0.5 * rho_local * Cd_body_eff * A * velocity * abs(velocity)
                 chute_drag_signed_raw = 0.0
                 if chute_deployed:
                     chute_drag_signed_raw = -0.5 * rho_local * target_Cd * (target_A * chute_fill) * velocity * abs(velocity)
-                raw_signed_drag = rocket_drag_signed_raw + chute_drag_signed_raw
+                airbrake_drag_signed_raw = 0.0
+                if airbrake_deployed and airbrake_area_eff > 0:
+                    # Airbrakes use a high Cd (typically 1.2-1.5 for bluff bodies)
+                    airbrake_cd = 1.3
+                    airbrake_drag_signed_raw = -0.5 * rho_local * airbrake_cd * airbrake_area_eff * velocity * abs(velocity)
+                raw_signed_drag = rocket_drag_signed_raw + chute_drag_signed_raw + airbrake_drag_signed_raw
             else:
                 rocket_drag_signed_raw = 0.0
                 chute_drag_signed_raw = 0.0
+                airbrake_drag_signed_raw = 0.0
                 raw_signed_drag = 0.0
-            # Smooth body and chute drag separately
+            # Smooth body, chute, and airbrake drag separately
             rocket_drag_signed_smoothed = (1 - drag_smoothing_alpha) * last_rocket_drag + drag_smoothing_alpha * rocket_drag_signed_raw
             chute_drag_signed_smoothed_uncapped = (1 - drag_smoothing_alpha) * last_chute_drag + drag_smoothing_alpha * chute_drag_signed_raw
+            airbrake_drag_signed_smoothed = (1 - drag_smoothing_alpha) * last_airbrake_drag + drag_smoothing_alpha * airbrake_drag_signed_raw
 
             # Apply limiter ONLY to the chute component (if deployed)
             drag_cap_applied = False
@@ -360,12 +394,13 @@ def run_simulation(
                         chute_drag_signed_smoothed = sign * mag
 
             # Combine components
-            signed_drag_smoothed_uncapped = rocket_drag_signed_smoothed + chute_drag_signed_smoothed_uncapped
-            signed_drag = rocket_drag_signed_smoothed + chute_drag_signed_smoothed
+            signed_drag_smoothed_uncapped = rocket_drag_signed_smoothed + chute_drag_signed_smoothed_uncapped + airbrake_drag_signed_smoothed
+            signed_drag = rocket_drag_signed_smoothed + chute_drag_signed_smoothed + airbrake_drag_signed_smoothed
 
             # Update history
             last_rocket_drag = rocket_drag_signed_smoothed
             last_chute_drag = chute_drag_signed_smoothed
+            last_airbrake_drag = airbrake_drag_signed_smoothed
 
             # Net acceleration (positive upward)
             a = (F + signed_drag) / m - g
@@ -415,6 +450,8 @@ def run_simulation(
                 'Cd_eff': current_Cd,
                 'A_eff': current_A,
                 'chute_deployed': chute_deployed,
+                'airbrake_deployed': airbrake_deployed,
+                'airbrake_drag_signed_raw': airbrake_drag_signed_raw,
                 'mass': m,
                 'mdot': mdot,
                 'sim_version': sim_version,
