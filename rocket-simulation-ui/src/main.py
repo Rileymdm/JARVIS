@@ -43,6 +43,9 @@ class RocketSimulationUI(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self._rocket_img_cache = {}
+        self._rocket_img_raw = None
+        self._thrust_curve_cache_key = None
+        self._thrust_curve_cache = None
         
         # Initialize theme system
         self.current_theme = "retro"  # Default to retro theme
@@ -1855,6 +1858,17 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
     def load_thrust_curve_data(self):
         """Load thrust curve data from file or use default. Returns (times, thrusts, thrust_func, burn_time)"""
+        cache_key = ("default",)
+        if hasattr(self, 'thrust_curve_path') and self.thrust_curve_path:
+            try:
+                abs_path = os.path.abspath(self.thrust_curve_path)
+                stat = os.stat(abs_path)
+                cache_key = ("file", abs_path, stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                cache_key = ("missing", os.path.abspath(self.thrust_curve_path))
+        if self._thrust_curve_cache_key == cache_key and self._thrust_curve_cache is not None:
+            return self._thrust_curve_cache
+
         thrust_data = []
         self.current_motor_info = {}  # Reset motor info
         
@@ -1906,8 +1920,10 @@ class RocketSimulationUI(QtWidgets.QWidget):
         
         # Display motor info if available
         self.display_motor_info()
-        
-        return times_thrust, thrusts, thrust_func, burn_time
+
+        self._thrust_curve_cache_key = cache_key
+        self._thrust_curve_cache = (times_thrust, thrusts, thrust_func, burn_time)
+        return self._thrust_curve_cache
 
     def display_motor_info(self):
         """Display extracted motor information in the results label"""
@@ -3713,6 +3729,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
         )
         if fileName:
             self.thrust_curve_path = fileName
+            self._thrust_curve_cache_key = None
+            self._thrust_curve_cache = None
             self.result_label.setText(f"Selected thrust curve: {fileName}")
             # Try to auto-fill propellant mass from the selected CSV
             try:
@@ -4105,10 +4123,11 @@ class RocketSimulationUI(QtWidgets.QWidget):
 
         import matplotlib.image as mpimg
         from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-        rocket_img = mpimg.imread(os.path.join(os.path.dirname(__file__), 'Rocket.png'))
-        self._rocket_img = rocket_img  # Store for animation
+        if self._rocket_img_raw is None:
+            self._rocket_img_raw = mpimg.imread(os.path.join(os.path.dirname(__file__), 'Rocket.png'))
+        self._rocket_img = self._rocket_img_raw  # Store for animation
         self._rocket_zoom = 0.08
-        imagebox = OffsetImage(rocket_img, zoom=self._rocket_zoom)  # Adjust zoom for desired size
+        imagebox = OffsetImage(self._rocket_img, zoom=self._rocket_zoom)  # Adjust zoom for desired size
         rocket_artist = AnnotationBbox(
             imagebox,
             (x_pos, y_pos),
@@ -4136,6 +4155,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
         # Animation state
         self._fbd_frame = 0
         self._fbd_results = results
+        self._fbd_apogee_frame = int(np.argmax([r['altitude'] for r in self._fbd_results])) if self._fbd_results else 0
+        self._fbd_chute_frame = next((i for i, r in enumerate(self._fbd_results) if r.get('chute_deployed')), None)
 
         from utils import get_flight_phase
         def fbd_anim_step():
@@ -4175,16 +4196,11 @@ class RocketSimulationUI(QtWidgets.QWidget):
                 self._fbd_frame += 1
             self._fbd_subframe = subframe
 
-            # Track apogee and chute deployment
-            altitudes = [r['altitude'] for r in self._fbd_results]
-            apogee_frame = np.argmax(altitudes)
-            chute_frame = next((i for i, r in enumerate(self._fbd_results) if r.get('chute_deployed')), None)
-
             # Flip rocket at apogee (point down)
-            if frame >= apogee_frame and (chute_frame is None or frame < chute_frame):
+            if frame >= self._fbd_apogee_frame and (self._fbd_chute_frame is None or frame < self._fbd_chute_frame):
                 angle += 180.0
             # Flip back when chute deploys
-            if chute_frame is not None and frame >= chute_frame:
+            if self._fbd_chute_frame is not None and frame >= self._fbd_chute_frame:
                 angle -= 180.0
 
             # Adjust for image orientation (e.g., subtract 90° if rocket.png points right)
@@ -4618,6 +4634,8 @@ class RocketSimulationUI(QtWidgets.QWidget):
             thrust_path = config.get('thrust_curve_path')
             if thrust_path and os.path.exists(thrust_path):
                 self.thrust_curve_path = thrust_path
+                self._thrust_curve_cache_key = None
+                self._thrust_curve_cache = None
                 self.result_label.setText(f"Loaded profile thrust curve: {os.path.basename(thrust_path)}")
 
             return True
@@ -4858,5 +4876,3 @@ def excepthook(type_, value, tb):
     sys.exit(1)
 
 sys.excepthook = excepthook
-
-
