@@ -177,11 +177,13 @@ def run_simulation(
         ]
 
     times, thrusts = zip(*thrust_data)
+    thrust_interp = interp1d(times, thrusts, bounds_error=False, fill_value=0.0)
+    first_thrust = float(thrusts[0])
     # For times before thrust curve starts, use the first thrust value
     def thrust_func_fixed(t):
         if t < times[0]:
-            return thrusts[0]
-        return float(interp1d(times, thrusts, bounds_error=False, fill_value=0.0)(t))
+            return first_thrust
+        return float(thrust_interp(t))
 
     burn_time = times[-1]
     g = 9.81
